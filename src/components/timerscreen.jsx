@@ -14,27 +14,21 @@ export default function TimerScreen() {
   
   const [taskMode, setTaskMode] = useState('academic'); 
   
-  // 📚 Group Selection State
-  const [activeGroup, setActiveGroup] = useState(() => {
-    return localStorage.getItem('academic_group') || 'science';
-  });
-
+  const [activeGroup, setActiveGroup] = useState(() => localStorage.getItem('academic_group') || 'science');
   const [selectedSubject, setSelectedSubject] = useState('');
   const [selectedChapter, setSelectedChapter] = useState('');
   const [selectedActions, setSelectedActions] = useState(['basic']); 
   const [customTaskInput, setCustomTaskInput] = useState("");
 
-  // ⏱️ INLINE TIMER STATE (Background Proofed)
+  // ⏱️ INLINE TIMER STATE (Background & Heartbeat Proofed)
   const [activeTaskId, setActiveTaskId] = useState(null);
   const [liveSeconds, setLiveSeconds] = useState(0);
   const timerRef = useRef(null);
   const sessionStartRef = useRef(null);
 
-  // 🟢 SUPABASE PRESENCE
   const roomChannelRef = useRef(null);
   const trueDateStr = useRef(new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' }));
 
-  // 🕛 STATE TRACKER FOR MIDNIGHT SPLIT & PRESENCE
   const currentState = useRef({ habits, todos, studySeconds, activeTaskId });
   useEffect(() => {
     currentState.current = { habits, todos, studySeconds, activeTaskId };
@@ -70,37 +64,69 @@ export default function TimerScreen() {
 
       const { data, error } = await supabase.from('daily_logs').select('*').eq('user_id', session.user.id).eq('date_str', trueDateStr.current).single();
 
+      let finalHabits = { water: 0, meal: 0, prayer: 0, sleepChecked: false, exerciseChecked: false };
+      let finalTodos = [];
+      let finalStudySeconds = 0;
+
       if (data && !error) {
-        setHabits({
+        finalHabits = {
           water: data.water || 0, meal: data.meal || 0, prayer: data.prayer || 0,
           sleepChecked: data.sleep || false, exerciseChecked: data.workout || false
-        });
-        if (data.todos) setTodos(data.todos);
-        if (data.study_seconds) setStudySeconds(parseInt(data.study_seconds, 10));
+        };
+        if (data.todos) finalTodos = data.todos;
+        if (data.study_seconds) finalStudySeconds = parseInt(data.study_seconds, 10);
       }
-      setLoadingData(false);
 
-      // 🔄 RECOVER BACKGROUND TIMER (Navigating away or YouTube mode)
+      // 🔄 HEARTBEAT RECOVERY ENGINE (Tab Close / AFK Protection)
       const savedTaskId = localStorage.getItem('active_task_id');
       const savedStart = localStorage.getItem('active_task_start');
+      const lastTick = localStorage.getItem('last_tick');
 
-      if (savedTaskId && savedStart && isMounted) {
-        const startDate = new Date(Number(savedStart)).toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' });
-        
-        if (startDate === trueDateStr.current) {
-          console.log("Recovering background task...");
-          setActiveTaskId(Number(savedTaskId));
-          sessionStartRef.current = Number(savedStart);
-          
-          timerRef.current = setInterval(() => {
-            const diff = Math.floor((Date.now() - Number(savedStart)) / 1000);
-            setLiveSeconds(diff);
-          }, 1000);
-        } else {
-          localStorage.removeItem('active_task_id');
-          localStorage.removeItem('active_task_start');
+      if (savedTaskId && savedStart && lastTick && isMounted) {
+        const startStr = new Date(Number(savedStart)).toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' });
+        // Calculate exact time spent before tab was closed
+        const sessionSecs = Math.floor((Number(lastTick) - Number(savedStart)) / 1000);
+
+        if (sessionSecs > 0) {
+          if (startStr === trueDateStr.current) {
+            console.log(`Recovering ${sessionSecs}s from closed tab...`);
+            finalStudySeconds += sessionSecs;
+            finalTodos = finalTodos.map(t => 
+              t.id === Number(savedTaskId) ? { ...t, trackedSeconds: (t.trackedSeconds || 0) + sessionSecs } : t
+            );
+            
+            // Auto-save the recovered data
+            await supabase.from('daily_logs').upsert({
+              user_id: session.user.id, date_str: trueDateStr.current, 
+              water: finalHabits.water, meal: finalHabits.meal, prayer: finalHabits.prayer,
+              sleep: finalHabits.sleepChecked, workout: finalHabits.exerciseChecked,
+              tasks_completed: finalTodos.filter(t => t.isDone).length, todos: finalTodos, study_seconds: finalStudySeconds 
+            }, { onConflict: 'user_id, date_str' });
+
+          } else {
+            // Crossed midnight while tab was closed! Update old day safely.
+            console.log("Recovering cross-midnight lost time...");
+            const { data: oldData } = await supabase.from('daily_logs').select('*').eq('user_id', session.user.id).eq('date_str', startStr).single();
+            if (oldData) {
+                const oldTodos = (oldData.todos || []).map(t => t.id === Number(savedTaskId) ? { ...t, trackedSeconds: (t.trackedSeconds || 0) + sessionSecs } : t);
+                const oldStudySecs = parseInt(oldData.study_seconds || 0, 10) + sessionSecs;
+                await supabase.from('daily_logs').upsert({
+                   ...oldData, todos: oldTodos, study_seconds: oldStudySecs
+                }, { onConflict: 'user_id, date_str' });
+            }
+          }
         }
+
+        // 🛑 CRITICAL: Always clear so timer starts PAUSED when returning
+        localStorage.removeItem('active_task_id');
+        localStorage.removeItem('active_task_start');
+        localStorage.removeItem('last_tick');
       }
+
+      setHabits(finalHabits);
+      setTodos(finalTodos);
+      setStudySeconds(finalStudySeconds);
+      setLoadingData(false);
     };
 
     initializeWorkspace();
@@ -118,30 +144,24 @@ export default function TimerScreen() {
     };
   }, []);
 
-  // 🟢 GLOBAL PRESENCE TRACKER (Auto-updates without spamming network)
+  // 🟢 GLOBAL PRESENCE
   useEffect(() => {
     if (!roomChannelRef.current || !userProfile?.username) return;
-
     if (activeTaskId) {
       const activeTask = currentState.current.todos.find(t => t.id === activeTaskId);
-      roomChannelRef.current.track({ 
-        username: userProfile.username, 
-        task: activeTask ? activeTask.title : 'Deep Work' 
-      });
+      roomChannelRef.current.track({ username: userProfile.username, task: activeTask ? activeTask.title : 'Deep Work' });
     } else {
       roomChannelRef.current.untrack();
     }
   }, [activeTaskId, userProfile]);
 
-  // 🕛 🔥 THE MIDNIGHT SPLITTER ENGINE 🔥
+  // 🕛 MIDNIGHT SPLITTER
   useEffect(() => {
     const midnightChecker = setInterval(() => {
       const currentBDDate = new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' });
 
       if (currentBDDate !== trueDateStr.current) {
-        console.log("🕛 Midnight Crossed! Executing Silent Split...");
         const { habits: currHabits, todos: currTodos, studySeconds: currStudySecs, activeTaskId: currActiveTask } = currentState.current;
-
         let oldStudySecs = currStudySecs;
         let oldTodos = [...currTodos];
 
@@ -152,20 +172,14 @@ export default function TimerScreen() {
         }
 
         const saveOldDayData = async () => {
-          try {
-            const { data: { session } } = await supabase.auth.getSession();
-            if (!session) return;
-            const completedCount = oldTodos.filter(t => t.isDone).length;
-            const payload = {
-              user_id: session.user.id, date_str: trueDateStr.current, 
-              water: currHabits.water, meal: currHabits.meal, prayer: currHabits.prayer,
-              sleep: currHabits.sleepChecked, workout: currHabits.exerciseChecked,
-              tasks_completed: completedCount, todos: oldTodos, study_seconds: oldStudySecs 
-            };
-            await supabase.from('daily_logs').upsert(payload, { onConflict: 'user_id, date_str' });
-          } catch (error) {
-            console.error("Midnight Sync Error:", error);
-          }
+          const { data: { session } } = await supabase.auth.getSession();
+          if (!session) return;
+          await supabase.from('daily_logs').upsert({
+            user_id: session.user.id, date_str: trueDateStr.current, 
+            water: currHabits.water, meal: currHabits.meal, prayer: currHabits.prayer,
+            sleep: currHabits.sleepChecked, workout: currHabits.exerciseChecked,
+            tasks_completed: oldTodos.filter(t => t.isDone).length, todos: oldTodos, study_seconds: oldStudySecs 
+          }, { onConflict: 'user_id, date_str' });
         };
         saveOldDayData();
 
@@ -178,11 +192,11 @@ export default function TimerScreen() {
           setLiveSeconds(0);
           const now = Date.now();
           sessionStartRef.current = now;
-          localStorage.setItem('active_task_start', now); // Update local storage for new day
+          localStorage.setItem('active_task_start', now); 
+          localStorage.setItem('last_tick', now); 
         }
       }
     }, 1000);
-
     return () => clearInterval(midnightChecker);
   }, []);
 
@@ -190,15 +204,11 @@ export default function TimerScreen() {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
-
-      const completedTasksCount = newTodos.filter(t => t.isDone).length;
-      const finalStudySeconds = overrideStudySeconds !== null ? overrideStudySeconds : studySeconds;
-
       const payload = {
         user_id: session.user.id, date_str: trueDateStr.current, 
         water: newHabits.water, meal: newHabits.meal, prayer: newHabits.prayer,
         sleep: newHabits.sleepChecked, workout: newHabits.exerciseChecked,
-        tasks_completed: completedTasksCount, todos: newTodos, study_seconds: finalStudySeconds 
+        tasks_completed: newTodos.filter(t => t.isDone).length, todos: newTodos, study_seconds: overrideStudySeconds !== null ? overrideStudySeconds : studySeconds 
       };
       await supabase.from('daily_logs').upsert(payload, { onConflict: 'user_id, date_str' });
     } catch (error) {
@@ -216,13 +226,41 @@ export default function TimerScreen() {
     const now = Date.now();
     sessionStartRef.current = now;
     
-    // 🔥 Save to Local Storage for Background Engine
+    // Set LocalStorage for Heartbeat Recovery
     localStorage.setItem('active_task_id', taskId);
     localStorage.setItem('active_task_start', now);
+    localStorage.setItem('last_tick', now);
 
     timerRef.current = setInterval(() => {
-      const diff = Math.floor((Date.now() - sessionStartRef.current) / 1000);
-      setLiveSeconds(diff);
+      const currentNow = Date.now();
+      const diff = Math.floor((currentNow - sessionStartRef.current) / 1000);
+      
+      // 🚀 THE NETFLIX APPROACH (Auto Pause after 2 Hours = 7200 sec)
+      if (diff >= 7200) {
+        clearInterval(timerRef.current);
+        const { todos: currTodos, studySeconds: currStudySecs, activeTaskId: currTaskId, habits: currHabits } = currentState.current;
+        
+        const newStudySecs = currStudySecs + diff;
+        const updatedTodos = currTodos.map(t => t.id === currTaskId ? { ...t, trackedSeconds: (t.trackedSeconds || 0) + diff } : t);
+        
+        setStudySeconds(newStudySecs);
+        setTodos(updatedTodos);
+        setActiveTaskId(null);
+        setLiveSeconds(0);
+        sessionStartRef.current = null;
+        
+        localStorage.removeItem('active_task_id');
+        localStorage.removeItem('active_task_start');
+        localStorage.removeItem('last_tick');
+        
+        syncWorkspaceToSupabase(currHabits, updatedTodos, newStudySecs);
+        
+        // Timeout ensures UI updates before alert blocks the thread
+        setTimeout(() => alert("⏳ Focus limit reached! Timer auto-paused after 2 hours. Take a short break!"), 100);
+      } else {
+        setLiveSeconds(diff);
+        localStorage.setItem('last_tick', currentNow); // Update Heartbeat
+      }
     }, 1000);
   };
 
@@ -242,9 +280,10 @@ export default function TimerScreen() {
       setLiveSeconds(0);
       sessionStartRef.current = null;
 
-      // 🔥 Remove from Local Storage
+      // Clean LocalStorage
       localStorage.removeItem('active_task_id');
       localStorage.removeItem('active_task_start');
+      localStorage.removeItem('last_tick');
     }
     return { newStudySecs, updatedTodos };
   };
@@ -331,13 +370,11 @@ export default function TimerScreen() {
     <div className="pt-6 pb-24 font-sans text-slate-800">
       <div className="max-w-4xl mx-auto space-y-6 px-2">
         
-        {/* HEADER SECTION */}
         <div className="text-center mb-10">
           <h1 className="text-3xl font-semibold text-slate-900 tracking-tight">Focus Workspace</h1>
           <p className="text-slate-500 font-normal mt-2">Manage your tasks and build consistent habits.</p>
         </div>
 
-        {/* PROGRESS BAR & BROADCASTING */}
         <div className="bg-sky-50/40 backdrop-blur-2xl border border-sky-100/60 shadow-sm rounded-3xl p-5 sm:p-6 transition-all duration-300">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4">
             <div className="w-full md:w-1/2">
@@ -364,7 +401,6 @@ export default function TimerScreen() {
 
         <div className="flex flex-col lg:flex-row gap-6">
           
-          {/* 🎯 ACTION ITEMS & INLINE TIMERS */}
           <div className="w-full lg:w-7/12 xl:w-8/12 space-y-4 order-1">
             <div className="bg-sky-50/40 backdrop-blur-2xl border border-sky-100/60 shadow-sm rounded-3xl p-5 sm:p-6 transition-all duration-300">
               
@@ -378,7 +414,6 @@ export default function TimerScreen() {
                 </div>
               </div>
 
-              {/* Input Section */}
               <div className="bg-white/60 border border-sky-50 rounded-2xl p-4 shadow-sm mb-6">
                 {taskMode === 'academic' ? (
                   <div className="space-y-3">
@@ -422,7 +457,6 @@ export default function TimerScreen() {
                 )}
               </div>
 
-              {/* 🔥 TODO LIST */}
               <div className="space-y-3">
                 {todos.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-8 bg-white/40 rounded-2xl border border-dashed border-sky-200 text-slate-400">
@@ -455,7 +489,6 @@ export default function TimerScreen() {
                           </div>
                         </div>
 
-                        {/* Timer Controls */}
                         <div className="flex items-center justify-between md:justify-end w-full md:w-auto mt-2 md:mt-0 pl-8 md:pl-0 gap-3">
                           <div className={`font-mono text-sm tracking-tight tabular-nums font-medium px-2.5 py-1 rounded-lg border ${isRunning ? 'text-[#10a37f] bg-[#10a37f]/10 border-[#10a37f]/20' : 'text-slate-500 bg-slate-50 border-slate-100'}`}>
                             {formatTime(displayTime)}
@@ -487,7 +520,6 @@ export default function TimerScreen() {
             </div>
           </div>
 
-          {/* 💪 PHYSICAL CORE */}
           <div className="w-full lg:w-5/12 xl:w-4/12 order-2">
             <div className="bg-sky-50/40 backdrop-blur-2xl border border-sky-100/60 shadow-sm rounded-3xl p-5 sm:p-6 transition-all duration-300">
               <h2 className="text-xl font-medium text-slate-800 flex items-center gap-2 mb-6 border-b border-sky-100/50 pb-4">
@@ -495,7 +527,6 @@ export default function TimerScreen() {
               </h2>
               
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-4">
-                {/* Hydration */}
                 <div className="bg-white border border-sky-50 rounded-2xl p-4 shadow-sm hover:border-sky-100 transition-all">
                   <div className="flex justify-between items-center mb-3">
                     <div className="flex items-center gap-2">
@@ -517,7 +548,6 @@ export default function TimerScreen() {
                   </div>
                 </div>
                 
-                {/* Nutrition */}
                 <div className="bg-white border border-sky-50 rounded-2xl p-4 shadow-sm hover:border-sky-100 transition-all">
                   <div className="flex justify-between items-center mb-3">
                     <div className="flex items-center gap-2">
@@ -539,7 +569,6 @@ export default function TimerScreen() {
                   </div>
                 </div>
 
-                {/* Prayer */}
                 <div className="bg-white border border-sky-50 rounded-2xl p-4 shadow-sm hover:border-sky-100 transition-all">
                   <div className="flex justify-between items-center mb-3">
                     <div className="flex items-center gap-2">
@@ -561,7 +590,6 @@ export default function TimerScreen() {
                   </div>
                 </div>
 
-                {/* Sleep & Workout */}
                 <div className="bg-white border border-sky-50 rounded-2xl p-4 shadow-sm hover:border-sky-100 transition-all flex flex-col gap-4">
                   <button disabled={habits.sleepChecked} onClick={() => updateHabit('sleepChecked', true)} className="flex justify-between items-center cursor-pointer group text-left w-full disabled:cursor-default">
                     <div className="flex items-center gap-2.5">
