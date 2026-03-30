@@ -14,7 +14,7 @@ export default function TimerScreen() {
   
   const [taskMode, setTaskMode] = useState('academic'); 
   
-  // 📚 Group Selection State (Synced with Syllabus)
+  // 📚 Group Selection State
   const [activeGroup, setActiveGroup] = useState(() => {
     return localStorage.getItem('academic_group') || 'science';
   });
@@ -24,7 +24,7 @@ export default function TimerScreen() {
   const [selectedActions, setSelectedActions] = useState(['basic']); 
   const [customTaskInput, setCustomTaskInput] = useState("");
 
-  // ⏱️ INLINE TIMER STATE
+  // ⏱️ INLINE TIMER STATE (Background Proofed)
   const [activeTaskId, setActiveTaskId] = useState(null);
   const [liveSeconds, setLiveSeconds] = useState(0);
   const timerRef = useRef(null);
@@ -34,25 +34,25 @@ export default function TimerScreen() {
   const roomChannelRef = useRef(null);
   const trueDateStr = useRef(new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' }));
 
-  // 🕛 STATE TRACKER FOR MIDNIGHT SPLIT (Always keeps the latest data for the interval)
+  // 🕛 STATE TRACKER FOR MIDNIGHT SPLIT & PRESENCE
   const currentState = useRef({ habits, todos, studySeconds, activeTaskId });
   useEffect(() => {
     currentState.current = { habits, todos, studySeconds, activeTaskId };
   }, [habits, todos, studySeconds, activeTaskId]);
 
-  // 🔄 Sync activeGroup to LocalStorage & Reset Dropdowns
   useEffect(() => {
     localStorage.setItem('academic_group', activeGroup);
     setSelectedSubject('');
     setSelectedChapter('');
   }, [activeGroup]);
 
-  // 🔍 Filter Subjects Based on Active Group
   const filteredSubjects = Object.entries(initialData.academics).filter(
     ([key, data]) => data.groups && data.groups.includes(activeGroup)
   );
 
   useEffect(() => {
+    let isMounted = true;
+
     const initializeWorkspace = async () => {
       try {
         const res = await fetch('https://timeapi.io/api/Time/current/zone?timeZone=Asia/Dhaka');
@@ -79,6 +79,28 @@ export default function TimerScreen() {
         if (data.study_seconds) setStudySeconds(parseInt(data.study_seconds, 10));
       }
       setLoadingData(false);
+
+      // 🔄 RECOVER BACKGROUND TIMER (Navigating away or YouTube mode)
+      const savedTaskId = localStorage.getItem('active_task_id');
+      const savedStart = localStorage.getItem('active_task_start');
+
+      if (savedTaskId && savedStart && isMounted) {
+        const startDate = new Date(Number(savedStart)).toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' });
+        
+        if (startDate === trueDateStr.current) {
+          console.log("Recovering background task...");
+          setActiveTaskId(Number(savedTaskId));
+          sessionStartRef.current = Number(savedStart);
+          
+          timerRef.current = setInterval(() => {
+            const diff = Math.floor((Date.now() - Number(savedStart)) / 1000);
+            setLiveSeconds(diff);
+          }, 1000);
+        } else {
+          localStorage.removeItem('active_task_id');
+          localStorage.removeItem('active_task_start');
+        }
+      }
     };
 
     initializeWorkspace();
@@ -87,6 +109,7 @@ export default function TimerScreen() {
     roomChannelRef.current.subscribe();
 
     return () => {
+      isMounted = false;
       clearInterval(timerRef.current);
       if (roomChannelRef.current) {
         roomChannelRef.current.untrack();
@@ -95,40 +118,46 @@ export default function TimerScreen() {
     };
   }, []);
 
+  // 🟢 GLOBAL PRESENCE TRACKER (Auto-updates without spamming network)
+  useEffect(() => {
+    if (!roomChannelRef.current || !userProfile?.username) return;
+
+    if (activeTaskId) {
+      const activeTask = currentState.current.todos.find(t => t.id === activeTaskId);
+      roomChannelRef.current.track({ 
+        username: userProfile.username, 
+        task: activeTask ? activeTask.title : 'Deep Work' 
+      });
+    } else {
+      roomChannelRef.current.untrack();
+    }
+  }, [activeTaskId, userProfile]);
+
   // 🕛 🔥 THE MIDNIGHT SPLITTER ENGINE 🔥
   useEffect(() => {
     const midnightChecker = setInterval(() => {
-      // Get exact real-time BD date string
       const currentBDDate = new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' });
 
-      // If the date changes (Midnight is crossed!)
       if (currentBDDate !== trueDateStr.current) {
         console.log("🕛 Midnight Crossed! Executing Silent Split...");
-        
         const { habits: currHabits, todos: currTodos, studySeconds: currStudySecs, activeTaskId: currActiveTask } = currentState.current;
 
         let oldStudySecs = currStudySecs;
         let oldTodos = [...currTodos];
 
-        // 1. Calculate running task time up to 11:59:59 PM
         if (currActiveTask && sessionStartRef.current) {
           const sessionSecs = Math.floor((Date.now() - sessionStartRef.current) / 1000);
           oldStudySecs += sessionSecs;
-          oldTodos = oldTodos.map(t => 
-            t.id === currActiveTask ? { ...t, trackedSeconds: (t.trackedSeconds || 0) + sessionSecs } : t
-          );
+          oldTodos = oldTodos.map(t => t.id === currActiveTask ? { ...t, trackedSeconds: (t.trackedSeconds || 0) + sessionSecs } : t);
         }
 
-        // 2. Save the OLD day's data securely
         const saveOldDayData = async () => {
           try {
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) return;
             const completedCount = oldTodos.filter(t => t.isDone).length;
-            
             const payload = {
-              user_id: session.user.id, 
-              date_str: trueDateStr.current, // <-- OLD DATE
+              user_id: session.user.id, date_str: trueDateStr.current, 
               water: currHabits.water, meal: currHabits.meal, prayer: currHabits.prayer,
               sleep: currHabits.sleepChecked, workout: currHabits.exerciseChecked,
               tasks_completed: completedCount, todos: oldTodos, study_seconds: oldStudySecs 
@@ -140,24 +169,19 @@ export default function TimerScreen() {
         };
         saveOldDayData();
 
-        // 3. Set global date to the NEW day
         trueDateStr.current = currentBDDate;
-
-        // 4. Reset UI & States for the NEW day
-        const emptyHabits = { water: 0, meal: 0, prayer: 0, sleepChecked: false, exerciseChecked: false };
-        const newDayTodos = oldTodos.map(t => ({ ...t, trackedSeconds: 0, isDone: false })); // Keep tasks but reset time and status
-        
-        setHabits(emptyHabits);
-        setTodos(newDayTodos);
+        setHabits({ water: 0, meal: 0, prayer: 0, sleepChecked: false, exerciseChecked: false });
+        setTodos(oldTodos.map(t => ({ ...t, trackedSeconds: 0, isDone: false })));
         setStudySeconds(0);
 
-        // 5. Resume the active task invisibly for the NEW day
         if (currActiveTask) {
           setLiveSeconds(0);
-          sessionStartRef.current = Date.now();
+          const now = Date.now();
+          sessionStartRef.current = now;
+          localStorage.setItem('active_task_start', now); // Update local storage for new day
         }
       }
-    }, 1000); // Check every second
+    }, 1000);
 
     return () => clearInterval(midnightChecker);
   }, []);
@@ -176,7 +200,6 @@ export default function TimerScreen() {
         sleep: newHabits.sleepChecked, workout: newHabits.exerciseChecked,
         tasks_completed: completedTasksCount, todos: newTodos, study_seconds: finalStudySeconds 
       };
-
       await supabase.from('daily_logs').upsert(payload, { onConflict: 'user_id, date_str' });
     } catch (error) {
       console.error("Workspace Sync Error:", error);
@@ -189,12 +212,13 @@ export default function TimerScreen() {
 
     setActiveTaskId(taskId);
     setLiveSeconds(0);
-    sessionStartRef.current = Date.now();
-
-    const activeTask = todos.find(t => t.id === taskId);
-    if (roomChannelRef.current && userProfile?.username) {
-      roomChannelRef.current.track({ username: userProfile.username, task: activeTask ? activeTask.title : 'Deep Work' });
-    }
+    
+    const now = Date.now();
+    sessionStartRef.current = now;
+    
+    // 🔥 Save to Local Storage for Background Engine
+    localStorage.setItem('active_task_id', taskId);
+    localStorage.setItem('active_task_start', now);
 
     timerRef.current = setInterval(() => {
       const diff = Math.floor((Date.now() - sessionStartRef.current) / 1000);
@@ -218,7 +242,9 @@ export default function TimerScreen() {
       setLiveSeconds(0);
       sessionStartRef.current = null;
 
-      if (roomChannelRef.current) roomChannelRef.current.untrack();
+      // 🔥 Remove from Local Storage
+      localStorage.removeItem('active_task_id');
+      localStorage.removeItem('active_task_start');
     }
     return { newStudySecs, updatedTodos };
   };
@@ -356,19 +382,11 @@ export default function TimerScreen() {
               <div className="bg-white/60 border border-sky-50 rounded-2xl p-4 shadow-sm mb-6">
                 {taskMode === 'academic' ? (
                   <div className="space-y-3">
-                    
-                    {/* 📚 SCIENCE / ARTS TOGGLE */}
                     <div className="flex bg-slate-100/80 p-1 rounded-xl shadow-inner border border-slate-200/50 w-full sm:w-fit">
-                      <button 
-                        onClick={() => setActiveGroup('science')} 
-                        className={`flex-1 sm:flex-none px-4 py-1.5 rounded-lg text-[12px] font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 ${activeGroup === 'science' ? 'bg-white shadow-sm text-[#10a37f]' : 'text-slate-500 hover:text-slate-700'}`}
-                      >
+                      <button onClick={() => setActiveGroup('science')} className={`flex-1 sm:flex-none px-4 py-1.5 rounded-lg text-[12px] font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 ${activeGroup === 'science' ? 'bg-white shadow-sm text-[#10a37f]' : 'text-slate-500 hover:text-slate-700'}`}>
                         <GraduationCap size={14} /> Science
                       </button>
-                      <button 
-                        onClick={() => setActiveGroup('arts')} 
-                        className={`flex-1 sm:flex-none px-4 py-1.5 rounded-lg text-[12px] font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 ${activeGroup === 'arts' ? 'bg-white shadow-sm text-sky-500' : 'text-slate-500 hover:text-slate-700'}`}
-                      >
+                      <button onClick={() => setActiveGroup('arts')} className={`flex-1 sm:flex-none px-4 py-1.5 rounded-lg text-[12px] font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 ${activeGroup === 'arts' ? 'bg-white shadow-sm text-sky-500' : 'text-slate-500 hover:text-slate-700'}`}>
                         <Palette size={14} /> Arts
                       </button>
                     </div>
@@ -477,7 +495,6 @@ export default function TimerScreen() {
               </h2>
               
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-4">
-                
                 {/* Hydration */}
                 <div className="bg-white border border-sky-50 rounded-2xl p-4 shadow-sm hover:border-sky-100 transition-all">
                   <div className="flex justify-between items-center mb-3">
