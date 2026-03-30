@@ -4,6 +4,16 @@ import { Droplets, Utensils, Moon, Activity, BookOpen, Plus, Check, Trash2, Play
 import { ProgressContext } from '../App';
 import { supabase } from '../services/supabase';
 
+// 🌐 THE GLOBAL HEARTBEAT ENGINE
+// Runs continuously as long as the React tab is open, ignoring screen changes!
+if (typeof window !== 'undefined' && !window.globalTickInterval) {
+  window.globalTickInterval = setInterval(() => {
+    if (localStorage.getItem('active_task_id')) {
+      localStorage.setItem('last_tick', Date.now().toString());
+    }
+  }, 1000);
+}
+
 export default function TimerScreen() {
   const { syncSyllabusFromTodo, userProfile } = useContext(ProgressContext);
 
@@ -13,20 +23,17 @@ export default function TimerScreen() {
   const [loadingData, setLoadingData] = useState(true);
   
   const [taskMode, setTaskMode] = useState('academic'); 
-  
   const [activeGroup, setActiveGroup] = useState(() => localStorage.getItem('academic_group') || 'science');
   const [selectedSubject, setSelectedSubject] = useState('');
   const [selectedChapter, setSelectedChapter] = useState('');
   const [selectedActions, setSelectedActions] = useState(['basic']); 
   const [customTaskInput, setCustomTaskInput] = useState("");
 
-  // ⏱️ INLINE TIMER STATE 
   const [activeTaskId, setActiveTaskId] = useState(null);
   const [liveSeconds, setLiveSeconds] = useState(0);
   const timerRef = useRef(null);
   const sessionStartRef = useRef(null);
 
-  // 🟢 LIVE ROOM STATE
   const [onlineUsers, setOnlineUsers] = useState([]);
   const roomChannelRef = useRef(null);
   const trueDateStr = useRef(new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' }));
@@ -46,6 +53,53 @@ export default function TimerScreen() {
     ([key, data]) => data.groups && data.groups.includes(activeGroup)
   );
 
+  // 🛠️ HELPER TO START INTERVAL (Prevents DRY)
+  const startTimerInterval = (startStrTime) => {
+    timerRef.current = setInterval(() => {
+      const currentNow = Date.now();
+      const diff = Math.floor((currentNow - startStrTime) / 1000);
+      
+      if (diff >= 7200) {
+        clearInterval(timerRef.current);
+        const { todos: currTodos, studySeconds: currStudySecs, activeTaskId: currTaskId, habits: currHabits } = currentState.current;
+        
+        const newStudySecs = currStudySecs + diff;
+        const updatedTodos = currTodos.map(t => t.id === currTaskId ? { ...t, trackedSeconds: (t.trackedSeconds || 0) + diff } : t);
+        
+        setStudySeconds(newStudySecs);
+        setTodos(updatedTodos);
+        setActiveTaskId(null);
+        setLiveSeconds(0);
+        sessionStartRef.current = null;
+        
+        localStorage.removeItem('active_task_id');
+        localStorage.removeItem('active_task_start');
+        localStorage.removeItem('last_tick');
+        
+        syncWorkspaceToSupabase(currHabits, updatedTodos, newStudySecs);
+        setTimeout(() => alert("⏳ Focus limit reached! Timer auto-paused after 2 hours. Take a short break!"), 100);
+      } else {
+        setLiveSeconds(diff);
+      }
+    }, 1000);
+  };
+
+  const syncWorkspaceToSupabase = async (newHabits, newTodos, overrideStudySeconds = null) => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+      const payload = {
+        user_id: session.user.id, date_str: trueDateStr.current, 
+        water: newHabits.water, meal: newHabits.meal, prayer: newHabits.prayer,
+        sleep: newHabits.sleepChecked, workout: newHabits.exerciseChecked,
+        tasks_completed: newTodos.filter(t => t.isDone).length, todos: newTodos, study_seconds: overrideStudySeconds !== null ? overrideStudySeconds : studySeconds 
+      };
+      await supabase.from('daily_logs').upsert(payload, { onConflict: 'user_id, date_str' });
+    } catch (error) {
+      console.error("Workspace Sync Error:", error);
+    }
+  };
+
   useEffect(() => {
     let isMounted = true;
 
@@ -57,9 +111,7 @@ export default function TimerScreen() {
           const realTime = new Date(data.dateTime + "+06:00");
           trueDateStr.current = realTime.toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' });
         }
-      } catch (err) {
-        console.warn("API Sync failed. Using Local BD Time.");
-      }
+      } catch (err) {}
 
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
@@ -79,43 +131,56 @@ export default function TimerScreen() {
         if (data.study_seconds) finalStudySeconds = parseInt(data.study_seconds, 10);
       }
 
-      // 🔄 HEARTBEAT RECOVERY ENGINE
+      // 🔄 SMART RECOVERY ENGINE
       const savedTaskId = localStorage.getItem('active_task_id');
       const savedStart = localStorage.getItem('active_task_start');
       const lastTick = localStorage.getItem('last_tick');
 
       if (savedTaskId && savedStart && lastTick && isMounted) {
         const startStr = new Date(Number(savedStart)).toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' });
-        const sessionSecs = Math.floor((Number(lastTick) - Number(savedStart)) / 1000);
+        const now = Date.now();
+        const tickDiff = Math.floor((now - Number(lastTick)) / 1000);
 
-        if (sessionSecs > 0) {
-          if (startStr === trueDateStr.current) {
-            finalStudySeconds += sessionSecs;
-            finalTodos = finalTodos.map(t => 
-              t.id === Number(savedTaskId) ? { ...t, trackedSeconds: (t.trackedSeconds || 0) + sessionSecs } : t
-            );
-            
-            await supabase.from('daily_logs').upsert({
-              user_id: session.user.id, date_str: trueDateStr.current, 
-              water: finalHabits.water, meal: finalHabits.meal, prayer: finalHabits.prayer,
-              sleep: finalHabits.sleepChecked, workout: finalHabits.exerciseChecked,
-              tasks_completed: finalTodos.filter(t => t.isDone).length, todos: finalTodos, study_seconds: finalStudySeconds 
-            }, { onConflict: 'user_id, date_str' });
+        // CASE 1: App is still open (navigated from Dashboard) -> RESUME VISUALLY!
+        if (tickDiff <= 5 && startStr === trueDateStr.current) {
+           setActiveTaskId(Number(savedTaskId));
+           sessionStartRef.current = Number(savedStart);
+           startTimerInterval(Number(savedStart));
+        } 
+        // CASE 2: Tab was closed or Netflix Limit hit -> ADD TIME & PAUSE!
+        else {
+          const sessionSecs = Math.floor((Number(lastTick) - Number(savedStart)) / 1000);
+          const validSecs = Math.min(sessionSecs, 7200); 
 
-          } else {
-            const { data: oldData } = await supabase.from('daily_logs').select('*').eq('user_id', session.user.id).eq('date_str', startStr).single();
-            if (oldData) {
-                const oldTodos = (oldData.todos || []).map(t => t.id === Number(savedTaskId) ? { ...t, trackedSeconds: (t.trackedSeconds || 0) + sessionSecs } : t);
-                const oldStudySecs = parseInt(oldData.study_seconds || 0, 10) + sessionSecs;
-                await supabase.from('daily_logs').upsert({
-                   ...oldData, todos: oldTodos, study_seconds: oldStudySecs
-                }, { onConflict: 'user_id, date_str' });
+          if (validSecs > 0) {
+            if (startStr === trueDateStr.current) {
+              finalStudySeconds += validSecs;
+              finalTodos = finalTodos.map(t => 
+                t.id === Number(savedTaskId) ? { ...t, trackedSeconds: (t.trackedSeconds || 0) + validSecs } : t
+              );
+              
+              await supabase.from('daily_logs').upsert({
+                user_id: session.user.id, date_str: trueDateStr.current, 
+                water: finalHabits.water, meal: finalHabits.meal, prayer: finalHabits.prayer,
+                sleep: finalHabits.sleepChecked, workout: finalHabits.exerciseChecked,
+                tasks_completed: finalTodos.filter(t => t.isDone).length, todos: finalTodos, study_seconds: finalStudySeconds 
+              }, { onConflict: 'user_id, date_str' });
+
+            } else {
+              const { data: oldData } = await supabase.from('daily_logs').select('*').eq('user_id', session.user.id).eq('date_str', startStr).single();
+              if (oldData) {
+                  const oldTodos = (oldData.todos || []).map(t => t.id === Number(savedTaskId) ? { ...t, trackedSeconds: (t.trackedSeconds || 0) + validSecs } : t);
+                  const oldStudySecs = parseInt(oldData.study_seconds || 0, 10) + validSecs;
+                  await supabase.from('daily_logs').upsert({
+                     ...oldData, todos: oldTodos, study_seconds: oldStudySecs
+                  }, { onConflict: 'user_id, date_str' });
+              }
             }
           }
+          localStorage.removeItem('active_task_id');
+          localStorage.removeItem('active_task_start');
+          localStorage.removeItem('last_tick');
         }
-        localStorage.removeItem('active_task_id');
-        localStorage.removeItem('active_task_start');
-        localStorage.removeItem('last_tick');
       }
 
       setHabits(finalHabits);
@@ -126,23 +191,18 @@ export default function TimerScreen() {
 
     initializeWorkspace();
 
-    // 🌐 SETUP SUPABASE PRESENCE (LIVE ROOM)
     roomChannelRef.current = supabase.channel('study_room');
-    
     roomChannelRef.current.on('presence', { event: 'sync' }, () => {
       if (!isMounted) return;
       const state = roomChannelRef.current.presenceState();
       const users = [];
       for (const id in state) {
         state[id].forEach(user => {
-          if (user.username) {
-            users.push({ username: user.username, task: user.task });
-          }
+          if (user.username) users.push({ username: user.username, task: user.task });
         });
       }
       setOnlineUsers(users);
     });
-
     roomChannelRef.current.subscribe();
 
     return () => {
@@ -155,7 +215,6 @@ export default function TimerScreen() {
     };
   }, []);
 
-  // 🟢 BROADCAST OWN PRESENCE
   useEffect(() => {
     if (!roomChannelRef.current || !userProfile?.username) return;
     if (activeTaskId) {
@@ -166,7 +225,6 @@ export default function TimerScreen() {
     }
   }, [activeTaskId, userProfile]);
 
-  // 🕛 MIDNIGHT SPLITTER
   useEffect(() => {
     const midnightChecker = setInterval(() => {
       const currentBDDate = new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' });
@@ -211,22 +269,6 @@ export default function TimerScreen() {
     return () => clearInterval(midnightChecker);
   }, []);
 
-  const syncWorkspaceToSupabase = async (newHabits, newTodos, overrideStudySeconds = null) => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-      const payload = {
-        user_id: session.user.id, date_str: trueDateStr.current, 
-        water: newHabits.water, meal: newHabits.meal, prayer: newHabits.prayer,
-        sleep: newHabits.sleepChecked, workout: newHabits.exerciseChecked,
-        tasks_completed: newTodos.filter(t => t.isDone).length, todos: newTodos, study_seconds: overrideStudySeconds !== null ? overrideStudySeconds : studySeconds 
-      };
-      await supabase.from('daily_logs').upsert(payload, { onConflict: 'user_id, date_str' });
-    } catch (error) {
-      console.error("Workspace Sync Error:", error);
-    }
-  };
-
   const handlePlay = (taskId) => {
     if (activeTaskId === taskId) return;
     if (activeTaskId) getSafePauseData(activeTaskId); 
@@ -241,34 +283,7 @@ export default function TimerScreen() {
     localStorage.setItem('active_task_start', now);
     localStorage.setItem('last_tick', now);
 
-    timerRef.current = setInterval(() => {
-      const currentNow = Date.now();
-      const diff = Math.floor((currentNow - sessionStartRef.current) / 1000);
-      
-      if (diff >= 7200) {
-        clearInterval(timerRef.current);
-        const { todos: currTodos, studySeconds: currStudySecs, activeTaskId: currTaskId, habits: currHabits } = currentState.current;
-        
-        const newStudySecs = currStudySecs + diff;
-        const updatedTodos = currTodos.map(t => t.id === currTaskId ? { ...t, trackedSeconds: (t.trackedSeconds || 0) + diff } : t);
-        
-        setStudySeconds(newStudySecs);
-        setTodos(updatedTodos);
-        setActiveTaskId(null);
-        setLiveSeconds(0);
-        sessionStartRef.current = null;
-        
-        localStorage.removeItem('active_task_id');
-        localStorage.removeItem('active_task_start');
-        localStorage.removeItem('last_tick');
-        
-        syncWorkspaceToSupabase(currHabits, updatedTodos, newStudySecs);
-        setTimeout(() => alert("⏳ Focus limit reached! Timer auto-paused after 2 hours. Take a short break!"), 100);
-      } else {
-        setLiveSeconds(diff);
-        localStorage.setItem('last_tick', currentNow);
-      }
-    }, 1000);
+    startTimerInterval(now);
   };
 
   const getSafePauseData = (targetTaskId) => {
@@ -381,13 +396,12 @@ export default function TimerScreen() {
     <div className="pt-6 pb-24 font-sans text-slate-800">
       <div className="max-w-4xl mx-auto space-y-6 sm:space-y-8 px-3">
         
-        {/* HEADER */}
         <div className="text-center mb-6 sm:mb-8">
           <h1 className="text-3xl font-semibold text-slate-900 tracking-tight">Focus Workspace</h1>
           <p className="text-slate-500 font-normal mt-2">Manage your tasks and build consistent habits.</p>
         </div>
 
-        {/* 🔴 1. LIVE STUDY ROOM (Top Priority) */}
+        {/* 🔴 LIVE STUDY ROOM */}
         <div className="bg-sky-50/40 backdrop-blur-2xl border border-sky-100/60 shadow-sm rounded-3xl p-5 sm:p-6 transition-all duration-300">
           <h2 className="text-xl font-medium text-slate-800 flex items-center justify-between mb-4 border-b border-sky-100/50 pb-4">
             <div className="flex items-center gap-2">
@@ -405,11 +419,10 @@ export default function TimerScreen() {
           <div className="max-h-60 overflow-y-auto custom-scrollbar pr-1">
             {onlineUsers.length === 0 ? (
               <div className="text-center py-6 text-slate-400 bg-white/40 rounded-2xl border border-dashed border-sky-200">
-                <p className="text-sm font-medium">Virtual study room..</p>
-                <p className="text-xs mt-1">See who is studying ....</p>
+                <p className="text-sm font-medium">It's quiet here...</p>
+                <p className="text-xs mt-1">Be the first to start your focus session!</p>
               </div>
             ) : (
-              /* Grid layout for full-width room */
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                 {onlineUsers.map((user, idx) => (
                   <div key={idx} className="bg-white border border-sky-50 p-3 rounded-2xl shadow-sm flex items-start gap-3 hover:border-[#10a37f]/30 transition-all group">
@@ -429,7 +442,7 @@ export default function TimerScreen() {
           </div>
         </div>
 
-        {/* 📊 2. PROGRESS BAR & BROADCASTING */}
+        {/* 📊 PROGRESS BAR */}
         <div className="bg-sky-50/40 backdrop-blur-2xl border border-sky-100/60 shadow-sm rounded-3xl p-5 sm:p-6 transition-all duration-300">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4">
             <div className="w-full md:w-1/2">
@@ -454,7 +467,7 @@ export default function TimerScreen() {
           </div>
         </div>
 
-        {/* 🎯 3. TODAY'S MISSIONS */}
+        {/* 🎯 TODAY'S MISSIONS */}
         <div className="bg-sky-50/40 backdrop-blur-2xl border border-sky-100/60 shadow-sm rounded-3xl p-5 sm:p-6 transition-all duration-300">
           <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4 border-b border-sky-100/50 pb-4">
             <h2 className="text-xl font-medium text-slate-800 flex items-center gap-2">
