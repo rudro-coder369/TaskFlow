@@ -169,6 +169,23 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* 🎬 DAILY MOTIVATIONAL VIDEO */}
+        <div className="bg-sky-50/40 backdrop-blur-2xl border border-sky-100/60 shadow-sm rounded-[2rem] p-2 sm:p-3 relative overflow-hidden group">
+          <div className="absolute top-5 left-5 z-10 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-sky-100/50 shadow-sm flex items-center gap-1.5">
+            <Flame size={14} className="text-orange-500 animate-pulse" />
+            <span className="text-[10px] font-bold text-slate-700 uppercase tracking-widest">Daily Motivation</span>
+          </div>
+          <video 
+            src="/motivational.mp4" 
+            controls
+            autoPlay
+            muted
+            loop
+            playsInline
+            className="w-full h-[200px] sm:h-[280px] object-cover rounded-3xl shadow-inner bg-slate-100/50"
+          />
+        </div>
+
         {/* 🚨 PENALTY ALERT POPUP */}
         {userStats.missedYesterday && (
           <div className="bg-rose-50/80 backdrop-blur-md border border-rose-100 p-4 rounded-3xl flex items-center gap-4 shadow-sm animate-pulse">
