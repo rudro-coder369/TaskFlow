@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Timer, Trophy, Loader2, Users, Flame, Moon, Sparkles } from 'lucide-react';
+import { Timer, Trophy, Loader2, Sparkles } from 'lucide-react';
 import { supabase } from '../services/supabase';
 
 export default function Dashboard() {
@@ -9,7 +9,6 @@ export default function Dashboard() {
 
   const [loadingData, setLoadingData] = useState(true);
   const [topScholars, setTopScholars] = useState([]); 
-  const [onlineScholars, setOnlineScholars] = useState([]);
 
   // ⏱️ SSC 2026 LIVE COUNTDOWN
   const calculateTimeLeft = () => {
@@ -32,7 +31,7 @@ export default function Dashboard() {
     return () => clearInterval(timer);
   }, []);
 
-  // 📥 FETCH DATA & LIVE PRESENCE
+  // 📥 FETCH DATA 
   useEffect(() => {
     const fetchTopScholars = async () => {
       const now = new Date();
@@ -69,20 +68,8 @@ export default function Dashboard() {
         fetchTopScholars();
       }).subscribe();
 
-    const room = supabase.channel('study_room');
-    room.on('presence', { event: 'sync' }, () => {
-      const newState = room.presenceState();
-      const activeUsers = [];
-      for (const id in newState) {
-        newState[id].forEach(userState => activeUsers.push(userState));
-      }
-      const uniqueUsers = Array.from(new Map(activeUsers.map(item => [item.username, item])).values());
-      setOnlineScholars(uniqueUsers);
-    }).subscribe();
-
     return () => {
       supabase.removeChannel(dbChannel);
-      supabase.removeChannel(room);
     };
   }, []);
 
@@ -176,49 +163,6 @@ export default function Dashboard() {
                 ))
               )}
            </div>
-        </div>
-
-        {/* 3️⃣ COMPACT LIVE ROOM */}
-        <div className={`${skyGlassCard} flex flex-col min-h-[180px] max-h-[300px]`}>
-          <div className="flex justify-between items-center mb-5 border-b border-sky-100/50 pb-4">
-            <div>
-              <div className="flex items-center gap-2.5">
-                <Users size={18} className="text-sky-500" strokeWidth={2.5} />
-                <span className="text-[14px] font-bold text-slate-800 tracking-tight uppercase">Live Room</span>
-              </div>
-              <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest mt-1">See who is studying</p>
-            </div>
-            <div className="flex items-center gap-2 bg-[#10a37f]/10 px-3 py-1.5 rounded-full border border-[#10a37f]/20">
-              <span className="relative flex h-2 w-2">
-                {onlineScholars.length > 0 && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#10a37f] opacity-75"></span>}
-                <span className={`relative inline-flex rounded-full h-2 w-2 ${onlineScholars.length > 0 ? 'bg-[#10a37f]' : 'bg-slate-400'}`}></span>
-              </span>
-              <span className={`text-[10px] sm:text-[11px] font-bold uppercase tracking-widest ${onlineScholars.length > 0 ? 'text-[#10a37f]' : 'text-slate-500'}`}>{onlineScholars.length} Online</span>
-            </div>
-          </div>
-
-          <div className="flex-1 overflow-y-auto pr-1 space-y-3 pb-1 custom-scrollbar">
-            {onlineScholars.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-8 text-center bg-white/50 rounded-[1.25rem] border border-dashed border-sky-200/60 h-full">
-                <Moon size={24} className="text-slate-300 mb-3" />
-                <p className="text-[11px] font-bold text-slate-400 tracking-wider uppercase">Room is empty.</p>
-              </div>
-            ) : (
-              onlineScholars.map((user, idx) => (
-                <div key={idx} className="flex items-center gap-3.5 bg-white/70 backdrop-blur-md border border-sky-100 hover:border-[#10a37f]/30 p-3.5 rounded-[1.25rem] shadow-sm transition-all duration-300">
-                  <div className="w-10 h-10 bg-sky-50 rounded-full flex items-center justify-center text-sky-600 text-sm font-black border border-sky-100 uppercase shadow-inner">
-                    {formatName(user.username).substring(0, 1)}
-                  </div>
-                  <div className="flex-1 overflow-hidden leading-tight">
-                    <span className="text-[14px] font-bold text-slate-800 block truncate">{formatName(user.username)}</span>
-                    <span className="text-[10px] sm:text-[11px] font-bold text-[#10a37f] flex items-center gap-1.5 mt-1.5 truncate uppercase tracking-widest">
-                      <Flame size={12} className="fill-current" /> {user.task || "Deep Work"}
-                    </span>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
         </div>
 
       </div>
