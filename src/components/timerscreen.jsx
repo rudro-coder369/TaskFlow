@@ -5,7 +5,6 @@ import { ProgressContext } from '../App';
 import { supabase } from '../services/supabase';
 
 // 🌐 THE GLOBAL HEARTBEAT ENGINE
-// Runs continuously as long as the React tab is open, ignoring screen changes!
 if (typeof window !== 'undefined' && !window.globalTickInterval) {
   window.globalTickInterval = setInterval(() => {
     if (localStorage.getItem('active_task_id')) {
@@ -34,6 +33,9 @@ export default function TimerScreen() {
   const timerRef = useRef(null);
   const sessionStartRef = useRef(null);
 
+  // 🌟 SYLLABUS POPUP STATE
+  const [syncPopupTask, setSyncPopupTask] = useState(null);
+
   const [onlineUsers, setOnlineUsers] = useState([]);
   const roomChannelRef = useRef(null);
   const trueDateStr = useRef(new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' }));
@@ -53,12 +55,13 @@ export default function TimerScreen() {
     ([key, data]) => data.groups && data.groups.includes(activeGroup)
   );
 
-  // 🛠️ HELPER TO START INTERVAL (Prevents DRY)
+  // 🛠️ HELPER TO START INTERVAL (Netflix Logic is here: 7200s limit)
   const startTimerInterval = (startStrTime) => {
     timerRef.current = setInterval(() => {
       const currentNow = Date.now();
       const diff = Math.floor((currentNow - startStrTime) / 1000);
       
+      // 2 HOURS AUTO-PAUSE LOGIC
       if (diff >= 7200) {
         clearInterval(timerRef.current);
         const { todos: currTodos, studySeconds: currStudySecs, activeTaskId: currTaskId, habits: currHabits } = currentState.current;
@@ -141,16 +144,14 @@ export default function TimerScreen() {
         const now = Date.now();
         const tickDiff = Math.floor((now - Number(lastTick)) / 1000);
 
-        // CASE 1: App is still open (navigated from Dashboard) -> RESUME VISUALLY!
         if (tickDiff <= 5 && startStr === trueDateStr.current) {
            setActiveTaskId(Number(savedTaskId));
            sessionStartRef.current = Number(savedStart);
            startTimerInterval(Number(savedStart));
         } 
-        // CASE 2: Tab was closed or Netflix Limit hit -> ADD TIME & PAUSE!
         else {
           const sessionSecs = Math.floor((Number(lastTick) - Number(savedStart)) / 1000);
-          const validSecs = Math.min(sessionSecs, 7200); 
+          const validSecs = Math.min(sessionSecs, 7200); // 7200 Max Guard
 
           if (validSecs > 0) {
             if (startStr === trueDateStr.current) {
@@ -336,7 +337,8 @@ export default function TimerScreen() {
     const newTask = {
       id: Date.now(), type: 'academic', subjectKey: selectedSubject,
       subjectName: initialData.academics[selectedSubject].name, chapterIndex: selectedChapter,
-      actions: selectedActions, title: `${initialData.academics[selectedSubject].chapters[selectedChapter]}`, 
+      actions: selectedActions, 
+      title: `${initialData.academics[selectedSubject].chapters[selectedChapter]}`, 
       isDone: false, trackedSeconds: 0
     };
     const newTodos = [...todos, newTask];
@@ -354,18 +356,31 @@ export default function TimerScreen() {
     setCustomTaskInput("");
   };
 
-  const toggleTodoDone = (id) => {
+  // 🚀 SYLLABUS SYNC LOGIC
+  const handleTodoCheckClick = (todo) => {
+    // If user is trying to mark an academic task as DONE
+    if (!todo.isDone && todo.type === 'academic') {
+      setSyncPopupTask(todo); // Open the popup!
+    } else {
+      // Normal toggle for custom tasks or unchecking
+      processTodoStatus(todo.id, false, !todo.isDone); 
+    }
+  };
+
+  const processTodoStatus = (id, shouldSyncSyllabus, forceStatus) => {
     const { newStudySecs, updatedTodos } = getSafePauseData(id); 
-    const finalTodos = updatedTodos.map(todo => {
-      if (todo.id === id) {
-        const newDoneStatus = !todo.isDone;
-        if (newDoneStatus && todo.type === 'academic') syncSyllabusFromTodo(todo.subjectKey, todo.chapterIndex, todo.actions);
-        return { ...todo, isDone: newDoneStatus };
+    const finalTodos = updatedTodos.map(t => {
+      if (t.id === id) {
+        if (shouldSyncSyllabus && t.type === 'academic') {
+          syncSyllabusFromTodo(t.subjectKey, t.chapterIndex, t.actions);
+        }
+        return { ...t, isDone: forceStatus };
       }
-      return todo;
+      return t;
     });
     setTodos(finalTodos);
     syncWorkspaceToSupabase(habits, finalTodos, newStudySecs);
+    setSyncPopupTask(null); // Close popup
   };
 
   const deleteTodo = (id) => {
@@ -393,7 +408,52 @@ export default function TimerScreen() {
   }
 
   return (
-    <div className="pt-6 pb-24 font-sans text-slate-800">
+    <div className="pt-6 pb-24 font-sans text-slate-800 relative">
+      
+      {/* 🌟 THE SYLLABUS SYNC POPUP */}
+      {syncPopupTask && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white/95 backdrop-blur-xl rounded-[2rem] p-6 shadow-2xl max-w-sm w-full border border-sky-100">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-12 h-12 rounded-full bg-sky-50 flex items-center justify-center text-sky-500 border border-sky-100 shadow-sm">
+                <BookOpen size={24} />
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-slate-800 leading-tight">Save to Syllabus?</h3>
+                <p className="text-xs font-medium text-slate-500 mt-0.5">Task completed successfully!</p>
+              </div>
+            </div>
+            
+            <div className="bg-slate-50/80 p-4 rounded-2xl mb-6 border border-slate-100 shadow-inner">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">{syncPopupTask.subjectName}</p>
+              <p className="text-[15px] font-semibold text-slate-700 leading-snug">{syncPopupTask.title}</p>
+              <div className="flex flex-wrap gap-1.5 mt-3">
+                {syncPopupTask.actions.map(act => (
+                  <span key={act} className="text-[10px] font-bold bg-[#10a37f]/10 text-[#10a37f] border border-[#10a37f]/20 px-2 py-0.5 rounded-md uppercase tracking-wide">
+                    {act}
+                  </span>
+                ))}
+              </div>
+            </div>
+            
+            <div className="flex gap-3">
+              <button 
+                onClick={() => processTodoStatus(syncPopupTask.id, false, true)} 
+                className="flex-1 py-3 rounded-xl text-sm font-semibold text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 transition-all shadow-sm"
+              >
+                No, Just Done
+              </button>
+              <button 
+                onClick={() => processTodoStatus(syncPopupTask.id, true, true)} 
+                className="flex-1 py-3 rounded-xl text-sm font-semibold text-white bg-[#10a37f] hover:bg-[#0e8c6d] transition-all shadow-sm"
+              >
+                Yes, Sync It
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-4xl mx-auto space-y-6 sm:space-y-8 px-3">
         
         <div className="text-center mb-6 sm:mb-8">
@@ -537,7 +597,8 @@ export default function TimerScreen() {
                   <div key={todo.id} className={`bg-white border rounded-2xl p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition-all duration-300 ${todo.isDone ? 'border-transparent bg-slate-50/50 opacity-70' : isRunning ? 'border-[#10a37f]/40 shadow-sm' : 'border-sky-50 hover:shadow-sm hover:border-sky-100'}`}>
                     
                     <div className="flex items-start md:items-center gap-3 flex-1 w-full">
-                      <button onClick={() => toggleTodoDone(todo.id)} className={`mt-0.5 md:mt-0 w-5 h-5 flex-shrink-0 rounded-md border flex items-center justify-center transition-all duration-300 ${todo.isDone ? 'bg-green-500 border-green-500 text-white' : 'bg-transparent border-slate-300 hover:border-[#10a37f]'}`}>
+                      {/* 🚀 UPDATED: CHECK BUTTON NOW OPENS POPUP IF APPLICABLE */}
+                      <button onClick={() => handleTodoCheckClick(todo)} className={`mt-0.5 md:mt-0 w-5 h-5 flex-shrink-0 rounded-md border flex items-center justify-center transition-all duration-300 ${todo.isDone ? 'bg-green-500 border-green-500 text-white' : 'bg-transparent border-slate-300 hover:border-[#10a37f]'}`}>
                         {todo.isDone && <Check size={12} strokeWidth={3} />}
                       </button>
                       
@@ -545,7 +606,11 @@ export default function TimerScreen() {
                         {todo.type === 'academic' && (
                           <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
                             <span className="text-[10px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">{todo.subjectName}</span>
-                            {todo.actions.map(act => <span key={act} className="text-[10px] font-medium text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md uppercase tracking-wide">{act}</span>)}
+                            {todo.actions.map(act => (
+                              <span key={act} className="text-[10px] font-medium text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md uppercase tracking-wide">
+                                {act}
+                              </span>
+                            ))}
                           </div>
                         )}
                         <span className={`text-sm font-normal transition-all ${todo.isDone ? 'line-through text-slate-400' : isRunning ? 'text-[#10a37f] font-medium' : 'text-slate-700'}`}>
