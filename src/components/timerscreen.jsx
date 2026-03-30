@@ -405,8 +405,8 @@ export default function TimerScreen() {
           <div className="max-h-60 overflow-y-auto custom-scrollbar pr-1">
             {onlineUsers.length === 0 ? (
               <div className="text-center py-6 text-slate-400 bg-white/40 rounded-2xl border border-dashed border-sky-200">
-                <p className="text-sm font-medium">It's quiet here...</p>
-                <p className="text-xs mt-1">Be the first to start your focus session!</p>
+                <p className="text-sm font-medium">Virtual study room..</p>
+                <p className="text-xs mt-1">See who is studying ....</p>
               </div>
             ) : (
               /* Grid layout for full-width room */
