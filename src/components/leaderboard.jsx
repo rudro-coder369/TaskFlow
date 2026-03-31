@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../services/supabase';
-import { Trophy, CalendarClock, Loader2 } from 'lucide-react';
+import { Trophy, CalendarClock, Loader2, Crown } from 'lucide-react';
 
 export default function Leaderboard() {
   const [leaders, setLeaders] = useState([]);
@@ -179,9 +179,9 @@ export default function Leaderboard() {
             <Trophy size={28} className="text-[#10a37f]" /> Daily Hall of Fame
           </h1>
           
-          <p className="text-slate-500 font-normal mt-2.5 max-w-lg mx-auto text-sm sm:text-base leading-relaxed">
+          <p className="text-slate-500 font-medium mt-2.5 max-w-lg mx-auto text-sm sm:text-base leading-relaxed">
             Compete with peers, push your limits, and climb the ranks. 
-            <br className="hidden sm:block" /> The leaderboard resets every night at <span className="font-semibold text-slate-700">12:00 AM</span>. Make today count! 🚀
+            <br className="hidden sm:block" /> The leaderboard resets every night at <span className="font-semibold text-slate-700">12:00 AM</span>. Make today count! 
           </p>
           
           <div className="inline-flex items-center gap-2 mt-5 bg-sky-50/60 border border-sky-100 px-4 py-2 rounded-full shadow-sm text-sm font-medium text-slate-600 transition-all">
@@ -200,64 +200,80 @@ export default function Leaderboard() {
         </div>
 
         <div className="bg-sky-50/40 backdrop-blur-2xl border border-sky-100/60 shadow-sm rounded-3xl overflow-hidden">
-          <div className="bg-white/60 flex justify-between p-4 sm:p-5 font-bold text-[10px] sm:text-xs text-slate-500 uppercase tracking-widest border-b border-sky-100/60">
-            <span className="w-12 sm:w-16 text-center">Rank</span>
-            <span className="flex-1 pl-2 sm:pl-4">Username</span>
-            <span className="w-24 sm:w-32 text-right">Focus Time</span>
+          {/* Subtle Header */}
+          <div className="bg-white/40 flex justify-between p-4 sm:p-5 font-bold text-[10px] sm:text-xs text-slate-500 uppercase tracking-widest border-b border-sky-100/60">
+            <span className="w-10 sm:w-12 text-center">Rank</span>
+            <span className="flex-1 pl-3 sm:pl-4">Scholar Profile</span>
+            <span className="w-24 sm:w-32 text-right">Total Focus</span>
           </div>
 
-          <div className="p-3 sm:p-4 space-y-2.5 max-h-[60vh] overflow-y-auto no-scrollbar">
+          <div className="p-3 sm:p-5 space-y-3 sm:space-y-4 max-h-[65vh] overflow-y-auto no-scrollbar">
             {!isTimeSynced || loading ? (
                 <div className="flex justify-center py-10">
-                    <span className="text-[#10a37f] font-bold tracking-widest uppercase text-xs animate-pulse">Fetching Live Standings...</span>
+                    <span className="text-[#10a37f] font-semibold tracking-widest uppercase text-xs animate-pulse">Fetching Live Standings...</span>
                 </div>
             ) : leaders.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-10 bg-white/40 rounded-[1.25rem] border border-dashed border-sky-200/60 h-full">
-                <Trophy size={24} className="text-slate-300 mb-3" />
-                <p className="text-[11px] font-bold text-slate-400 tracking-wider uppercase">No focus sessions yet today.</p>
-                <p className="text-[10px] text-slate-400 mt-1">Be the first to claim the #1 spot! 👑</p>
+              <div className="flex flex-col items-center justify-center py-10 bg-white/60 rounded-[1.5rem] border border-dashed border-sky-200/60 h-full">
+                <Trophy size={28} className="text-slate-300 mb-3" />
+                <p className="text-xs font-semibold text-slate-400 tracking-wider uppercase">No focus sessions yet today.</p>
+                <p className="text-[11px] text-slate-400 mt-1 font-medium">Be the first to claim the #1 spot! 👑</p>
               </div>
             ) : (
               leaders.map((user, index) => {
                 const stats = calculateStats(user.total_30d_seconds);
+                const isTop3 = index < 3;
                 
                 return (
-                  <div key={index} className="flex justify-between items-center p-3.5 sm:p-4 rounded-[1.25rem] bg-white border border-sky-50 shadow-sm transition-all hover:border-[#10a37f]/30">
+                  <div key={index} className="relative bg-white border border-slate-100/80 rounded-3xl p-4 shadow-sm flex items-center justify-between gap-3 sm:gap-4 transition-all hover:border-[#10a37f]/30 hover:shadow-md group">
                     
-                    <span className="w-12 sm:w-16 text-center font-semibold text-slate-800 text-xl">
-                      {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}`}
-                    </span>
-                    
-                    <div className="flex-1 ml-2 sm:ml-4 min-w-0">
-                      {/* 🚀 Username & Compact Breakdown in Flex Wrap */}
-                      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                        <p className="font-bold text-slate-800 text-[14px] sm:text-[15px] truncate leading-tight max-w-full">
-                          {formatName(user.profiles?.username)}
-                        </p>
-                        
-                        {(user.self_study_seconds > 0 || user.class_seconds > 0) && (
-                          <span className="text-[10px] font-semibold text-slate-400 whitespace-nowrap">
-                            {user.self_study_seconds > 0 ? `slf ${formatStudyTime(user.self_study_seconds)}` : ''}
-                            {user.self_study_seconds > 0 && user.class_seconds > 0 ? ' | ' : ''}
-                            {user.class_seconds > 0 ? `cls ${formatStudyTime(user.class_seconds)}` : ''}
-                          </span>
-                        )}
-                      </div>
-                      
-                      {/* Level and Rank Badges */}
-                      <div className="flex flex-wrap gap-1.5 mt-1">
-                        <span className="text-[9px] font-bold text-slate-500 bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded-md leading-none">
-                          Lvl {stats.level}
-                        </span>
-                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-md border leading-none ${stats.rank.bg} ${stats.rank.color} ${stats.rank.border}`}>
-                          {stats.rank.name}
-                        </span>
-                      </div>
+                    {/* 1️⃣ RANK SECTION */}
+                    <div className={`w-8 sm:w-10 flex-shrink-0 text-center flex justify-center ${isTop3 ? 'text-3xl' : 'text-xl font-bold text-slate-400'}`}>
+                      {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : index + 1}
                     </div>
                     
-                    <span className="w-24 sm:w-32 text-right font-mono tracking-tight tabular-nums font-bold text-emerald-700 bg-emerald-100/80 px-3 py-1.5 rounded-full border border-emerald-200 shadow-inner flex flex-col justify-center items-end">
-                      {formatStudyTime(user.study_seconds)}
-                    </span>
+                    {/* 2️⃣ USER INFO & BREAKDOWN SECTION */}
+                    <div className="flex-1 min-w-0 flex flex-col justify-center gap-1 ml-2">
+                      
+                      {/* Name and Level Badges */}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-semibold text-slate-800 text-[15px] sm:text-[17px] truncate tracking-tight">
+                          {formatName(user.profiles?.username)}
+                        </p>
+                        <div className="hidden sm:flex items-center gap-1.5">
+                          <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded leading-none">
+                            Lvl {stats.level}
+                          </span>
+                          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border leading-none ${stats.rank.bg} ${stats.rank.color} ${stats.rank.border}`}>
+                            {stats.rank.name}
+                          </span>
+                        </div>
+                      </div>
+                      
+                      {/* 🚀 PREMIUM TEXT BREAKDOWN (GREEN PILL) */}
+                      {(user.self_study_seconds > 0 || user.class_seconds > 0) && (
+                        <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                          {/* Mobile Only Lvl Badge */}
+                          <span className="flex sm:hidden items-center mr-0.5">
+                            <span className="text-[9px] font-semibold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded leading-none">
+                              Lvl {stats.level}
+                            </span>
+                          </span>
+
+                          <span className="font-mono text-[9px] sm:text-[10px] tracking-tight tabular-nums font-semibold px-2.5 py-0.5 rounded-lg bg-emerald-50/80 text-[#10a37f] border border-emerald-200/50 shadow-sm transition-colors group-hover:bg-[#10a37f]/10 group-hover:border-[#10a37f]/30">
+                            {user.self_study_seconds > 0 ? `SELF: ${formatStudyTime(user.self_study_seconds)}` : ''}
+                            {user.self_study_seconds > 0 && user.class_seconds > 0 ? <span className="text-emerald-300/80 mx-1">|</span> : ''}
+                            {user.class_seconds > 0 ? `CLS: ${formatStudyTime(user.class_seconds)}` : ''}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* 3️⃣ TOTAL TIME SECTION (PREMIUM HIGHLIGHTED PILL) */}
+                    <div className="flex flex-col items-end justify-center flex-shrink-0 ml-2">
+                      <div className="font-mono text-[13px] sm:text-[15px] tracking-tight tabular-nums font-semibold px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl bg-emerald-50/80 text-[#10a37f] border border-emerald-200/50 shadow-sm transition-colors group-hover:bg-[#10a37f]/10 group-hover:border-[#10a37f]/30">
+                        {formatStudyTime(user.study_seconds)}
+                      </div>
+                    </div>
                     
                   </div>
                 );

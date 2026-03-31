@@ -75,18 +75,6 @@ export default function TimerScreen() {
     }
   };
 
-  const updateDatabasePresence = async (taskName) => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return;
-    
-    if (taskName) {
-      const expiresAt = new Date(Date.now() + 7200 * 1000).toISOString(); 
-      await supabase.from('profiles').update({ active_task: taskName, task_expires_at: expiresAt }).eq('id', session.user.id);
-    } else {
-      await supabase.from('profiles').update({ active_task: null, task_expires_at: null }).eq('id', session.user.id);
-    }
-  };
-
   useEffect(() => {
     fetchLiveUsers();
     const dbLiveRoomSub = supabase.channel('live_room_db')
@@ -95,7 +83,7 @@ export default function TimerScreen() {
 
     return () => {
       supabase.removeChannel(dbLiveRoomSub);
-      updateDatabasePresence(null); 
+      // 🛑 NO Presence clearing here. App.jsx handles it globally.
     };
   }, []);
 
@@ -171,8 +159,11 @@ export default function TimerScreen() {
         localStorage.removeItem('active_task_start');
         localStorage.removeItem('last_tick');
         
+        // ✅ Notify Global Engine
+        localStorage.removeItem('active_task_title');
+        window.dispatchEvent(new Event('presence_update'));
+        
         syncWorkspaceToSupabase(currHabits, updatedTodos, newStudySecs, newSelf, newClass);
-        updateDatabasePresence(null); 
         
         try {
           const audio = new Audio('https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg');
@@ -262,7 +253,11 @@ export default function TimerScreen() {
            sessionStartRef.current = Number(savedStart);
            startTimerInterval(Number(savedStart));
            const resumedTask = finalTodos.find(t => t.id === Number(savedTaskId));
-           if (resumedTask) updateDatabasePresence(resumedTask.title);
+           if (resumedTask) {
+             // ✅ Notify Global Engine
+             localStorage.setItem('active_task_title', resumedTask.title);
+             window.dispatchEvent(new Event('presence_update'));
+           }
         } 
         else {
           const sessionSecs = Math.floor((Number(lastTick) - Number(savedStart)) / 1000);
@@ -305,7 +300,10 @@ export default function TimerScreen() {
           localStorage.removeItem('active_task_id');
           localStorage.removeItem('active_task_start');
           localStorage.removeItem('last_tick');
-          updateDatabasePresence(null);
+          
+          // ✅ Notify Global Engine
+          localStorage.removeItem('active_task_title');
+          window.dispatchEvent(new Event('presence_update'));
         }
       }
 
@@ -394,7 +392,11 @@ export default function TimerScreen() {
     localStorage.setItem('last_tick', now);
 
     const task = todos.find(t => t.id === taskId);
-    if (task) updateDatabasePresence(task.title);
+    if (task) {
+      // ✅ Notify Global Engine
+      localStorage.setItem('active_task_title', task.title);
+      window.dispatchEvent(new Event('presence_update'));
+    }
 
     startTimerInterval(now);
   };
@@ -426,7 +428,10 @@ export default function TimerScreen() {
       localStorage.removeItem('active_task_id');
       localStorage.removeItem('active_task_start');
       localStorage.removeItem('last_tick');
-      updateDatabasePresence(null);
+      
+      // ✅ Notify Global Engine
+      localStorage.removeItem('active_task_title');
+      window.dispatchEvent(new Event('presence_update'));
     }
     return { newStudySecs, newSelf, newClass, updatedTodos };
   };
@@ -609,7 +614,7 @@ export default function TimerScreen() {
           <p className="text-slate-500 font-normal mt-2">Plan your study tasks, focus deeply, and track your daily health habits.</p>
         </div>
 
-        {/* 🔴 LIVE STUDY ROOM (Database Backed) */}
+        {/* 🔴 LIVE STUDY ROOM (Database Backed - Scrollbar Removed, Auto-expanding) */}
         <div className="bg-sky-50/40 backdrop-blur-2xl border border-sky-100/60 shadow-sm rounded-3xl p-5 sm:p-6 transition-all duration-300">
           <h2 className="text-xl font-medium text-slate-800 flex items-center justify-between mb-4 border-b border-sky-100/50 pb-4">
             <div className="flex items-center gap-2">
@@ -624,7 +629,7 @@ export default function TimerScreen() {
             </div>
           </h2>
           
-          <div className="max-h-60 overflow-y-auto custom-scrollbar pr-1">
+          <div className="w-full transition-all duration-300">
             {onlineUsers.length === 0 ? (
               <div className="text-center py-6 text-slate-400 bg-white/40 rounded-2xl border border-dashed border-sky-200">
                 <p className="text-sm font-medium">It's quiet here right now...</p>
