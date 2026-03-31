@@ -14,6 +14,7 @@ import IOIPrep from './components/ioiprep';
 
 export const ProgressContext = createContext();
 
+// 💎 COMPACT TOP NAVIGATION
 const TopNav = ({ isIoiEnabled }) => {
   const location = useLocation();
   const navItems = [
@@ -54,6 +55,7 @@ const TopNav = ({ isIoiEnabled }) => {
   );
 };
 
+// 📱 COMPACT MOBILE FOOTER
 const MobileFooter = ({ isIoiEnabled }) => {
   const location = useLocation();
   const navItems = [
@@ -89,15 +91,45 @@ export default function App() {
   const [isIoiEnabled, setIsIoiEnabled] = useState(false);
   const [syllabusProgress, setSyllabusProgress] = useState({});
 
-  // 🫀 LOCAL OFFLINE RECOVERY TICK (No DB Spamming)
+  // 🫀 THE ULTIMATE GLOBAL PRESENCE & TICK ENGINE
   useEffect(() => {
     if (!session) return;
+
+    // 1️⃣ Global Timer Tick (Moved here to survive screen changes)
     const tickInterval = setInterval(() => {
       if (localStorage.getItem('active_task_id')) {
         localStorage.setItem('last_tick', Date.now().toString());
       }
     }, 1000);
-    return () => clearInterval(tickInterval);
+
+    // 2️⃣ Global Presence Sync
+    const syncPresenceToDatabase = async () => {
+      const activeTaskId = localStorage.getItem('active_task_id');
+      const activeTaskTitle = localStorage.getItem('active_task_title');
+
+      if (activeTaskId && activeTaskTitle) {
+        const expiresAt = new Date(Date.now() + 7200 * 1000).toISOString();
+        await supabase.from('profiles').update({
+          active_task: activeTaskTitle,
+          task_expires_at: expiresAt
+        }).eq('id', session.user.id);
+      } else {
+        await supabase.from('profiles').update({
+          active_task: null,
+          task_expires_at: null
+        }).eq('id', session.user.id);
+      }
+    };
+
+    syncPresenceToDatabase();
+    const heartbeatInterval = setInterval(syncPresenceToDatabase, 30000); // 30s aggressive sync
+    window.addEventListener('presence_update', syncPresenceToDatabase);
+
+    return () => {
+      clearInterval(tickInterval);
+      clearInterval(heartbeatInterval);
+      window.removeEventListener('presence_update', syncPresenceToDatabase);
+    };
   }, [session]);
 
   const fetchSessionAndProfile = useCallback(async () => {
