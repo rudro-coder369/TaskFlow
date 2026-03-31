@@ -14,7 +14,6 @@ import IOIPrep from './components/ioiprep';
 
 export const ProgressContext = createContext();
 
-// 💎 COMPACT TOP NAVIGATION
 const TopNav = ({ isIoiEnabled }) => {
   const location = useLocation();
   const navItems = [
@@ -55,7 +54,6 @@ const TopNav = ({ isIoiEnabled }) => {
   );
 };
 
-// 📱 COMPACT MOBILE FOOTER
 const MobileFooter = ({ isIoiEnabled }) => {
   const location = useLocation();
   const navItems = [
@@ -91,36 +89,15 @@ export default function App() {
   const [isIoiEnabled, setIsIoiEnabled] = useState(false);
   const [syllabusProgress, setSyllabusProgress] = useState({});
 
-  // 🫀 THE ULTIMATE GLOBAL PRESENCE ENGINE
+  // 🫀 LOCAL OFFLINE RECOVERY TICK (No DB Spamming)
   useEffect(() => {
     if (!session) return;
-
-    const syncPresenceToDatabase = async () => {
-      const activeTaskId = localStorage.getItem('active_task_id');
-      const activeTaskTitle = localStorage.getItem('active_task_title');
-
-      if (activeTaskId && activeTaskTitle) {
-        const expiresAt = new Date(Date.now() + 7200 * 1000).toISOString();
-        await supabase.from('profiles').update({
-          active_task: activeTaskTitle,
-          task_expires_at: expiresAt
-        }).eq('id', session.user.id);
-      } else {
-        await supabase.from('profiles').update({
-          active_task: null,
-          task_expires_at: null
-        }).eq('id', session.user.id);
+    const tickInterval = setInterval(() => {
+      if (localStorage.getItem('active_task_id')) {
+        localStorage.setItem('last_tick', Date.now().toString());
       }
-    };
-
-    syncPresenceToDatabase();
-    const heartbeatInterval = setInterval(syncPresenceToDatabase, 60000);
-    window.addEventListener('presence_update', syncPresenceToDatabase);
-
-    return () => {
-      clearInterval(heartbeatInterval);
-      window.removeEventListener('presence_update', syncPresenceToDatabase);
-    };
+    }, 1000);
+    return () => clearInterval(tickInterval);
   }, [session]);
 
   const fetchSessionAndProfile = useCallback(async () => {
