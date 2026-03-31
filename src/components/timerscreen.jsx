@@ -703,7 +703,7 @@ export default function TimerScreen() {
                 <BookOpen size={14} /> Self Study
               </button>
               <button onClick={() => setNewTaskStudyType('class')} className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[13px] font-semibold border transition-all ${newTaskStudyType === 'class' ? 'bg-indigo-50 text-indigo-600 border-indigo-200 shadow-sm' : 'bg-white text-slate-500 border-sky-100 hover:bg-slate-50'}`}>
-                <GraduationCap size={14} /> Class / Coaching
+                <GraduationCap size={14} /> Class 
               </button>
             </div>
 
