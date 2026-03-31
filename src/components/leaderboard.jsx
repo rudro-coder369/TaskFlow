@@ -94,7 +94,7 @@ export default function Leaderboard() {
   const fetchLeaderboard = async (dateString) => {
     setLoading(true);
     
-    // ১. আজকে যারা পড়েছে তাদের লিস্ট নেওয়া
+    // ১. আজকে যারা পড়েছে তাদের লিস্ট নেওয়া
     const { data: todayData, error } = await supabase
       .from('daily_logs')
       .select('user_id, study_seconds, profiles(username)')
@@ -103,7 +103,7 @@ export default function Leaderboard() {
       .limit(50);
       
     if (todayData && !error) {
-      // ২. গত ৩০ দিনের ডেটা নিয়ে আসা (সবার রিয়েল লেভেল হিসাব করার জন্য)
+      // ২. গত ৩০ দিনের ডেটা নিয়ে আসা (সবার রিয়েল লেভেল হিসাব করার জন্য)
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
       
@@ -168,15 +168,27 @@ export default function Leaderboard() {
   });
 
   return (
-    <div className="pt-6 font-sans text-slate-800 pb-24 px-3">
+    <div className="pt-6 font-sans text-slate-800 pb-24 px-3 relative">
+      
+      {/* 🚀 INJECTING CSS TO HIDE SCROLLBAR */}
+      <style dangerouslySetInnerHTML={{__html: `
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      `}} />
+
       <div className="max-w-3xl mx-auto space-y-6 sm:space-y-8">
         
         <div className="text-center mb-8">
           <h1 className="text-3xl font-semibold text-slate-900 tracking-tight flex items-center justify-center gap-2">
-            <Trophy size={28} className="text-[#10a37f]" /> Today's Leaderboard
+            <Trophy size={28} className="text-[#10a37f]" /> Daily Hall of Fame
           </h1>
           
-          <div className="inline-flex items-center gap-2 mt-4 bg-sky-50/60 border border-sky-100 px-4 py-2 rounded-full shadow-sm text-sm font-medium text-slate-600 transition-all">
+          <p className="text-slate-500 font-normal mt-2.5 max-w-lg mx-auto text-sm sm:text-base leading-relaxed">
+            Compete with peers, push your limits, and climb the ranks. 
+            <br className="hidden sm:block" /> The leaderboard resets every night at <span className="font-semibold text-slate-700">12:00 AM</span>. Make today count! 
+          </p>
+          
+          <div className="inline-flex items-center gap-2 mt-5 bg-sky-50/60 border border-sky-100 px-4 py-2 rounded-full shadow-sm text-sm font-medium text-slate-600 transition-all">
             {isTimeSynced ? (
               <>
                 <CalendarClock size={16} className="text-[#10a37f]" />
@@ -195,18 +207,20 @@ export default function Leaderboard() {
           <div className="bg-white/60 flex justify-between p-4 sm:p-5 font-bold text-[10px] sm:text-xs text-slate-500 uppercase tracking-widest border-b border-sky-100/60">
             <span className="w-12 sm:w-16 text-center">Rank</span>
             <span className="flex-1 pl-2 sm:pl-4">Username</span>
-            <span className="w-24 sm:w-32 text-right">Focused Time</span>
+            <span className="w-24 sm:w-32 text-right">Focus Time</span>
           </div>
 
-          <div className="p-3 sm:p-4 space-y-2.5 max-h-[60vh] overflow-y-auto custom-scrollbar">
+          {/* ADDED "no-scrollbar" class here */}
+          <div className="p-3 sm:p-4 space-y-2.5 max-h-[60vh] overflow-y-auto no-scrollbar">
             {!isTimeSynced || loading ? (
                 <div className="flex justify-center py-10">
-                    <span className="text-[#10a37f] font-bold tracking-widest uppercase text-xs animate-pulse">Fetching Servers...</span>
+                    <span className="text-[#10a37f] font-bold tracking-widest uppercase text-xs animate-pulse">Fetching Live Standings...</span>
                 </div>
             ) : leaders.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-10 bg-white/40 rounded-[1.25rem] border border-dashed border-sky-200/60 h-full">
                 <Trophy size={24} className="text-slate-300 mb-3" />
-                <p className="text-[11px] font-bold text-slate-400 tracking-wider uppercase">No sessions recorded today.</p>
+                <p className="text-[11px] font-bold text-slate-400 tracking-wider uppercase">No focus sessions yet today.</p>
+                <p className="text-[10px] text-slate-400 mt-1">Be the first to claim the #1 spot! 👑</p>
               </div>
             ) : (
               leaders.map((user, index) => {

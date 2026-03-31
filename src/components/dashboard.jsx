@@ -179,7 +179,7 @@ export default function Dashboard() {
             <span className="text-slate-400 font-bold tracking-widest text-[10px] sm:text-xs mb-1.5 uppercase flex items-center gap-1.5">
               <Sparkles size={12} className="text-[#10a37f]" /> {currentDate}
             </span>
-            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-slate-900">Hub Dashboard</h1>
+            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-slate-900">Your Study Hub</h1>
           </div>
         </div>
 
@@ -190,8 +190,8 @@ export default function Dashboard() {
               <AlertOctagon size={22} />
             </div>
             <div>
-              <p className="text-xs font-bold text-rose-700 uppercase tracking-wide">Consistency Deduction</p>
-              <p className="text-sm text-rose-900 font-medium">Missed study session yesterday. <span className="font-bold">-200 XP</span> penalty.</p>
+              <p className="text-xs font-bold text-rose-700 uppercase tracking-wide">Focus Streak Broken!</p>
+              <p className="text-sm text-rose-900 font-medium">You missed your session yesterday, so we deducted <span className="font-bold">200 XP</span>. Let's make it up today!</p>
             </div>
           </div>
         )}
@@ -224,7 +224,7 @@ export default function Dashboard() {
             </div>
 
             <div className="text-center sm:text-right w-full sm:w-auto bg-white/60 p-4 rounded-2xl border border-sky-100 shadow-sm">
-              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1.5">Total Experience</p>
+              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1.5">Total XP Earned</p>
               <p className="text-3xl font-bold text-slate-900 font-mono tracking-tight">{userStats.xp.toLocaleString()} <span className="text-sm text-[#10a37f] font-semibold">XP</span></p>
             </div>
           </div>
@@ -232,7 +232,7 @@ export default function Dashboard() {
           <div className="relative z-10 mt-6 pt-5 border-t border-sky-100/60">
             <div className="flex justify-between items-end mb-2.5">
               <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
-                <Flame size={13} className="text-[#10a37f]" /> Rank Progress
+                <Flame size={13} className="text-[#10a37f]" /> Journey to Next Rank
               </span>
               <span className="text-xs font-bold text-[#10a37f]">{Math.round(userStats.progress)}%</span>
             </div>
@@ -244,9 +244,9 @@ export default function Dashboard() {
             <div className="flex justify-between mt-2 text-[10px] font-bold text-slate-500 px-0.5">
               <span>{userStats.currentRank.min.toLocaleString()} XP</span>
               {userStats.currentRank.name !== 'Legend' ? (
-                <span className="text-[#10a37f]">Next: {userStats.currentRank.nextRank} ({userStats.currentRank.max.toLocaleString()} XP)</span>
+                <span className="text-[#10a37f]">Next up: {userStats.currentRank.nextRank} ({userStats.currentRank.max.toLocaleString()} XP)</span>
               ) : (
-                <span className="text-purple-600">Peak Achieved</span>
+                <span className="text-purple-600">Peak Achieved!</span>
               )}
             </div>
           </div>
@@ -261,7 +261,7 @@ export default function Dashboard() {
               </div>
               <div>
                 <h2 className="text-lg font-bold text-slate-900 tracking-tight leading-none uppercase">SSC 2026</h2>
-                <p className="text-[10px] text-slate-400 font-bold mt-1.5 uppercase tracking-widest">Target Deadline</p>
+                <p className="text-[10px] text-slate-400 font-bold mt-1.5 uppercase tracking-widest">Time left to prepare</p>
               </div>
             </div>
           </div>
@@ -284,20 +284,20 @@ export default function Dashboard() {
            <div className="flex items-center justify-between mb-6 border-b border-slate-100 pb-4">
              <div className="flex items-center gap-3">
                <Trophy size={20} className="text-[#10a37f]" strokeWidth={2} />
-               <span className="text-sm font-semibold text-slate-900 tracking-tight uppercase">Race for Excellence</span>
+               <span className="text-sm font-semibold text-slate-900 tracking-tight uppercase">Live Competition</span>
              </div>
              <div className="flex items-center gap-1.5 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-100">
                <span className="relative flex h-2 w-2">
                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                </span>
-               <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest">Live competition</span>
+               <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest">Live Standings</span>
              </div>
            </div>
            
            {topScholars.length === 0 ? (
               <div className="w-full text-center py-8 bg-slate-50/50 rounded-2xl border border-dashed border-slate-200">
-                <span className="text-[11px] font-bold text-slate-400 tracking-wider uppercase">Calculating scores...</span>
+                <span className="text-[11px] font-bold text-slate-400 tracking-wider uppercase">No scores yet. Be the first to start focusing!</span>
               </div>
            ) : (
              <div className="flex flex-col gap-4">
@@ -327,7 +327,6 @@ export default function Dashboard() {
                    </div>
                    
                    <div className="text-right">
-                     {/* 🚀 BUG FIX: Used inline-flex instead of block flex */}
                      <span className="inline-flex items-center justify-end gap-1 text-[10px] font-bold text-slate-500 bg-slate-100/80 px-2.5 py-1 rounded-full mb-1.5 border border-slate-200/50">
                        <Clock3 size={11}/>
                        {formatStudyTime(topScholars[0].totalSecs)}
@@ -410,7 +409,7 @@ export default function Dashboard() {
                    {isExpanded ? (
                      <>Show Less <ChevronUp size={14} /></>
                    ) : (
-                     <>Full Rankings <ChevronDown size={14} /></>
+                     <>View Full Leaderboard <ChevronDown size={14} /></>
                    )}
                  </button>
                )}

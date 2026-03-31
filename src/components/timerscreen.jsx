@@ -39,7 +39,6 @@ export default function TimerScreen() {
   const [dailyMilestones, setDailyMilestones] = useState({ targets: [], reached: [] });
 
   const [onlineUsers, setOnlineUsers] = useState([]);
-  const roomChannelRef = useRef(null);
   const trueDateStr = useRef(new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' }));
 
   const currentState = useRef({ habits, todos, studySeconds, activeTaskId, dailyMilestones });
@@ -47,31 +46,51 @@ export default function TimerScreen() {
     currentState.current = { habits, todos, studySeconds, activeTaskId, dailyMilestones };
   }, [habits, todos, studySeconds, activeTaskId, dailyMilestones]);
 
-  // 🚀 1. BACKGROUND KEEP-ALIVE WORKER
+  // 🔔 REQUEST NOTIFICATION PERMISSION ON MOUNT
   useEffect(() => {
-    const workerCode = `
-      let timer;
-      self.onmessage = function(e) {
-        if (e.data === 'start') {
-          timer = setInterval(() => self.postMessage('tick'), 25000);
-        } else if (e.data === 'stop') {
-          clearInterval(timer);
-        }
-      };
-    `;
-    const blob = new Blob([workerCode], { type: 'application/javascript' });
-    const worker = new Worker(URL.createObjectURL(blob));
+    if ("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") {
+      Notification.requestPermission();
+    }
+  }, []);
 
-    worker.postMessage('start');
-    worker.onmessage = () => {
-      if (localStorage.getItem('active_task_id')) {
-        localStorage.setItem('last_tick', Date.now().toString());
-      }
-    };
+  // 🚀 1. DATABASE LIVE ROOM LOGIC
+  const fetchLiveUsers = async () => {
+    const nowIso = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('username, active_task')
+      .not('active_task', 'is', null)
+      .gte('task_expires_at', nowIso); 
+
+    if (data && !error) {
+      setOnlineUsers(data.map(u => ({ username: u.username, task: u.active_task })));
+    }
+  };
+
+  const updateDatabasePresence = async (taskName) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+    
+    if (taskName) {
+      const expiresAt = new Date(Date.now() + 7200 * 1000).toISOString(); 
+      await supabase.from('profiles').update({ active_task: taskName, task_expires_at: expiresAt }).eq('id', session.user.id);
+    } else {
+      await supabase.from('profiles').update({ active_task: null, task_expires_at: null }).eq('id', session.user.id);
+    }
+  };
+
+  useEffect(() => {
+    fetchLiveUsers();
+
+    const dbLiveRoomSub = supabase.channel('live_room_db')
+      .on('postgres', { event: 'UPDATE', schema: 'public', table: 'profiles' }, () => {
+        fetchLiveUsers();
+      })
+      .subscribe();
 
     return () => {
-      worker.postMessage('stop');
-      worker.terminate();
+      supabase.removeChannel(dbLiveRoomSub);
+      updateDatabasePresence(null); 
     };
   }, []);
 
@@ -97,7 +116,7 @@ export default function TimerScreen() {
     localStorage.setItem('academic_group', activeGroup);
     setSelectedSubject('');
     setSelectedChapter('');
-    setSelectedActions(['basic']); // Reset actions when group changes
+    setSelectedActions(['basic']); 
   }, [activeGroup]);
 
   const filteredSubjects = Object.entries(initialData.academics).filter(
@@ -124,7 +143,7 @@ export default function TimerScreen() {
         }
       });
 
-      // 🛑 2 HOURS AUTO-PAUSE LOGIC
+      // 🛑 2 HOURS AUTO-PAUSE LOGIC WITH NOTIFICATION & SOUND
       if (diff >= 7200) {
         clearInterval(timerRef.current);
         const newStudySecs = currStudySecs + diff;
@@ -141,7 +160,23 @@ export default function TimerScreen() {
         localStorage.removeItem('last_tick');
         
         syncWorkspaceToSupabase(currHabits, updatedTodos, newStudySecs);
-        setTimeout(() => alert("⏳ Focus limit reached! Timer auto-paused after 2 hours. Take a short break!"), 100);
+        updateDatabasePresence(null); // Remove from live room
+        
+        // Play Sound
+        try {
+          const audio = new Audio('https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg');
+          audio.play();
+        } catch(e) { console.log("Sound play error"); }
+
+        // Show Notification
+        if ("Notification" in window && Notification.permission === "granted") {
+          new Notification("⏳ Focus Limit Reached!", {
+            body: "You've studied for 2 hours straight. Timer auto-paused. Take a break!",
+            icon: "/favicon.ico" 
+          });
+        } else {
+          setTimeout(() => alert("⏳ Focus limit reached! Timer auto-paused after 2 hours. Take a short break!"), 100);
+        }
       } else {
         setLiveSeconds(diff);
       }
@@ -195,6 +230,7 @@ export default function TimerScreen() {
         if (data.study_seconds) finalStudySeconds = parseInt(data.study_seconds, 10);
       }
 
+      // 🔄 SMART RECOVERY ENGINE
       const savedTaskId = localStorage.getItem('active_task_id');
       const savedStart = localStorage.getItem('active_task_start');
       const lastTick = localStorage.getItem('last_tick');
@@ -208,6 +244,8 @@ export default function TimerScreen() {
            setActiveTaskId(Number(savedTaskId));
            sessionStartRef.current = Number(savedStart);
            startTimerInterval(Number(savedStart));
+           const resumedTask = finalTodos.find(t => t.id === Number(savedTaskId));
+           if (resumedTask) updateDatabasePresence(resumedTask.title);
         } 
         else {
           const sessionSecs = Math.floor((Number(lastTick) - Number(savedStart)) / 1000);
@@ -241,6 +279,7 @@ export default function TimerScreen() {
           localStorage.removeItem('active_task_id');
           localStorage.removeItem('active_task_start');
           localStorage.removeItem('last_tick');
+          updateDatabasePresence(null);
         }
       }
 
@@ -252,39 +291,11 @@ export default function TimerScreen() {
 
     initializeWorkspace();
 
-    roomChannelRef.current = supabase.channel('study_room');
-    roomChannelRef.current.on('presence', { event: 'sync' }, () => {
-      if (!isMounted) return;
-      const state = roomChannelRef.current.presenceState();
-      const users = [];
-      for (const id in state) {
-        state[id].forEach(user => {
-          if (user.username) users.push({ username: user.username, task: user.task });
-        });
-      }
-      setOnlineUsers(users);
-    });
-    roomChannelRef.current.subscribe();
-
     return () => {
       isMounted = false;
       clearInterval(timerRef.current);
-      if (roomChannelRef.current) {
-        roomChannelRef.current.untrack();
-        supabase.removeChannel(roomChannelRef.current);
-      }
     };
   }, []);
-
-  useEffect(() => {
-    if (!roomChannelRef.current || !userProfile?.username) return;
-    if (activeTaskId) {
-      const activeTask = currentState.current.todos.find(t => t.id === activeTaskId);
-      roomChannelRef.current.track({ username: userProfile.username, task: activeTask ? activeTask.title : 'Deep Work' });
-    } else {
-      roomChannelRef.current.untrack(); 
-    }
-  }, [activeTaskId, userProfile]);
 
   useEffect(() => {
     const midnightChecker = setInterval(() => {
@@ -344,6 +355,9 @@ export default function TimerScreen() {
     localStorage.setItem('active_task_start', now);
     localStorage.setItem('last_tick', now);
 
+    const task = todos.find(t => t.id === taskId);
+    if (task) updateDatabasePresence(task.title);
+
     startTimerInterval(now);
   };
 
@@ -366,6 +380,7 @@ export default function TimerScreen() {
       localStorage.removeItem('active_task_id');
       localStorage.removeItem('active_task_start');
       localStorage.removeItem('last_tick');
+      updateDatabasePresence(null);
     }
     return { newStudySecs, updatedTodos };
   };
@@ -405,7 +420,7 @@ export default function TimerScreen() {
     setTodos(newTodos);
     syncWorkspaceToSupabase(habits, newTodos);
     setSelectedChapter(''); 
-    setSelectedActions(['basic']); // Reset to basic after adding
+    setSelectedActions(['basic']);
   };
 
   const handleAddCustomTodo = () => {
@@ -461,19 +476,9 @@ export default function TimerScreen() {
   // 🧠 DYNAMIC ACTIONS LOGIC based on subject
   const getAvailableActions = (subjectKey) => {
     if (!subjectKey) return ['basic', 'cq', 'mcq', 'mastered'];
-    
     const keyLower = subjectKey.toLowerCase();
-    
-    // English 1st/2nd and ICT: Only basic & mastered
-    if (keyLower.includes('english') || keyLower.includes('ict')) {
-      return ['basic', 'mastered'];
-    }
-    // Bangla 2nd: basic, mcq, mastered (NO CQ)
-    if (keyLower.includes('bangla_2nd') || keyLower.includes('bangla2')) {
-      return ['basic', 'mcq', 'mastered'];
-    }
-    
-    // Default for Math, Physics, Chem, Biology, etc.
+    if (keyLower.includes('english') || keyLower.includes('ict')) return ['basic', 'mastered'];
+    if (keyLower.includes('bangla_2nd') || keyLower.includes('bangla2')) return ['basic', 'mcq', 'mastered'];
     return ['basic', 'cq', 'mcq', 'mastered'];
   };
 
@@ -495,15 +500,15 @@ export default function TimerScreen() {
             <div className="w-16 h-16 mx-auto rounded-full bg-white/20 flex items-center justify-center text-white mb-4 border border-white/30 shadow-inner">
               <Trophy size={32} />
             </div>
-            <h3 className="text-2xl font-bold text-white mb-2">Focus Spark!</h3>
+            <h3 className="text-2xl font-bold text-white mb-2">Milestone Unlocked!</h3>
             <p className="text-emerald-50 font-medium mb-6">
-              You've hit a secret daily milestone! <br/> Amazing consistency! 🚀
+              You've hit a surprise study milestone today! <br/> Great job staying consistent. 🚀
             </p>
             <button 
               onClick={() => setMilestonePopup(null)} 
               className="w-full py-3 rounded-xl font-bold text-[#10a37f] bg-white shadow-md hover:bg-emerald-50 transition-all"
             >
-              Keep Going
+              Awesome, let's go!
             </button>
           </div>
         </div>
@@ -518,8 +523,8 @@ export default function TimerScreen() {
                 <BookOpen size={24} />
               </div>
               <div>
-                <h3 className="text-xl font-bold text-slate-800 leading-tight">Save to Syllabus?</h3>
-                <p className="text-xs font-medium text-slate-600 mt-0.5">Task completed successfully!</p>
+                <h3 className="text-xl font-bold text-slate-800 leading-tight">Update Syllabus Progress?</h3>
+                <p className="text-xs font-medium text-slate-600 mt-0.5">You finished this task!</p>
               </div>
             </div>
             
@@ -540,13 +545,13 @@ export default function TimerScreen() {
                 onClick={() => processTodoStatus(syncPopupTask.id, false, true)} 
                 className="flex-1 py-3 rounded-xl text-sm font-semibold text-slate-600 bg-white/90 border border-white hover:bg-white transition-all shadow-sm"
               >
-                No, Just Done
+                No, just here
               </button>
               <button 
                 onClick={() => processTodoStatus(syncPopupTask.id, true, true)} 
                 className="flex-1 py-3 rounded-xl text-sm font-semibold text-white bg-[#10a37f] hover:bg-[#0e8c6d] border border-[#10a37f] transition-all shadow-sm"
               >
-                Yes, Sync It
+                Yes, update it
               </button>
             </div>
           </div>
@@ -556,30 +561,30 @@ export default function TimerScreen() {
       <div className="max-w-4xl mx-auto space-y-6 sm:space-y-8 px-3">
         
         <div className="text-center mb-6 sm:mb-8">
-          <h1 className="text-3xl font-semibold text-slate-900 tracking-tight">Focus Workspace</h1>
-          <p className="text-slate-500 font-normal mt-2">Manage your tasks and build consistent habits.</p>
+          <h1 className="text-3xl font-semibold text-slate-900 tracking-tight">Your Study Workspace</h1>
+          <p className="text-slate-500 font-normal mt-2">Plan your study tasks, focus deeply, and track your daily health habits.</p>
         </div>
 
-        {/* 🔴 LIVE STUDY ROOM */}
+        {/* 🔴 LIVE STUDY ROOM (Database Backed) */}
         <div className="bg-sky-50/40 backdrop-blur-2xl border border-sky-100/60 shadow-sm rounded-3xl p-5 sm:p-6 transition-all duration-300">
           <h2 className="text-xl font-medium text-slate-800 flex items-center justify-between mb-4 border-b border-sky-100/50 pb-4">
             <div className="flex items-center gap-2">
-              <Users size={20} className="text-sky-500" /> Live Room
+              <Users size={20} className="text-sky-500" /> Live Study Room
             </div>
             <div className="flex items-center gap-1.5 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100 shadow-sm">
               <span className="relative flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
               </span>
-              <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">{onlineUsers.length} Online</span>
+              <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">{onlineUsers.length} Active</span>
             </div>
           </h2>
           
           <div className="max-h-60 overflow-y-auto custom-scrollbar pr-1">
             {onlineUsers.length === 0 ? (
               <div className="text-center py-6 text-slate-400 bg-white/40 rounded-2xl border border-dashed border-sky-200">
-                <p className="text-sm font-medium">It's quiet here...</p>
-                <p className="text-xs mt-1">Be the first to start your focus session!</p>
+                <p className="text-sm font-medium">It's quiet here right now...</p>
+                <p className="text-xs mt-1">Start a task to join the live room and inspire others!</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
@@ -606,7 +611,7 @@ export default function TimerScreen() {
           <div className="flex flex-col md:flex-row justify-between items-center gap-4">
             <div className="w-full md:w-1/2">
               <div className="flex justify-between items-end mb-2">
-                <span className="text-sm font-medium text-slate-600">Mission Progress</span>
+                <span className="text-sm font-medium text-slate-600">Daily Task Progress</span>
                 <span className="text-lg font-semibold text-[#10a37f]">{progressPercent}%</span>
               </div>
               <div className="h-2 w-full bg-sky-100 rounded-full overflow-hidden shadow-inner">
@@ -620,7 +625,7 @@ export default function TimerScreen() {
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#10a37f] opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-[#10a37f]"></span>
                 </span>
-                <span className="text-xs font-medium text-[#10a37f] tracking-wide">Broadcasting Live</span>
+                <span className="text-xs font-medium text-[#10a37f] tracking-wide">You are live</span>
               </div>
             )}
           </div>
@@ -630,11 +635,11 @@ export default function TimerScreen() {
         <div className="bg-sky-50/40 backdrop-blur-2xl border border-sky-100/60 shadow-sm rounded-3xl p-5 sm:p-6 transition-all duration-300">
           <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4 border-b border-sky-100/50 pb-4">
             <h2 className="text-xl font-medium text-slate-800 flex items-center gap-2">
-              <Activity size={20} className="text-slate-400" /> Today's Missions
+              <Activity size={20} className="text-slate-400" /> Your Tasks for Today
             </h2>
             <div className="flex bg-white p-1 rounded-xl shadow-sm border border-sky-100">
-              <button onClick={() => setTaskMode('academic')} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${taskMode === 'academic' ? 'bg-[#10a37f] text-white' : 'text-slate-500 hover:text-slate-700'}`}>Academic</button>
-              <button onClick={() => setTaskMode('custom')} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${taskMode === 'custom' ? 'bg-[#10a37f] text-white' : 'text-slate-500 hover:text-slate-700'}`}>Custom</button>
+              <button onClick={() => setTaskMode('academic')} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${taskMode === 'academic' ? 'bg-[#10a37f] text-white' : 'text-slate-500 hover:text-slate-700'}`}>From Syllabus</button>
+              <button onClick={() => setTaskMode('custom')} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${taskMode === 'custom' ? 'bg-[#10a37f] text-white' : 'text-slate-500 hover:text-slate-700'}`}>Custom Task</button>
             </div>
           </div>
 
@@ -657,20 +662,20 @@ export default function TimerScreen() {
                     onChange={(e) => { 
                       setSelectedSubject(e.target.value); 
                       setSelectedChapter(''); 
-                      setSelectedActions(['basic']); // Reset selection
+                      setSelectedActions(['basic']); // Reset
                     }}
                   >
-                    <option value="">Select Subject...</option>
+                    <option value="">Choose a subject...</option>
                     {filteredSubjects.map(([key, subject]) => <option key={key} value={key}>{subject.name}</option>)}
                   </select>
                   <select className="flex-1 bg-white border border-sky-100 rounded-xl px-3 py-2.5 text-sm font-normal text-slate-700 focus:outline-none focus:border-[#10a37f] disabled:opacity-50 transition-all" value={selectedChapter} onChange={(e) => setSelectedChapter(e.target.value)} disabled={!selectedSubject}>
-                    <option value="">Select Chapter...</option>
+                    <option value="">Choose a chapter...</option>
                     {selectedSubject && initialData.academics[selectedSubject].chapters.map((chapter, index) => <option key={index} value={index}>{chapter}</option>)}
                   </select>
                 </div>
                 <div className="flex flex-col sm:flex-row justify-between items-center gap-4 pt-2 border-t border-sky-50">
                   <div className="flex flex-wrap gap-2 w-full sm:w-auto">
-                    {/* 🚀 DYNAMIC ACTIONS MAPPED HERE */}
+                    {/* 🚀 DYNAMIC ACTIONS MAPPER */}
                     {getAvailableActions(selectedSubject).map(action => (
                       <button 
                         key={action} 
@@ -682,15 +687,15 @@ export default function TimerScreen() {
                     ))}
                   </div>
                   <button onClick={handleAddAcademicTodo} className="w-full sm:w-auto bg-[#10a37f] text-white px-5 py-2 rounded-xl hover:bg-[#0e8c6d] transition-all shadow-sm font-medium flex items-center justify-center gap-1.5 text-sm">
-                    <Plus size={16} /> Add Task
+                    <Plus size={16} /> Add to Plan
                   </button>
                 </div>
               </div>
             ) : (
               <div className="flex flex-col sm:flex-row gap-3">
-                <input type="text" value={customTaskInput} onChange={(e) => setCustomTaskInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleAddCustomTodo()} placeholder="Type a custom task..." className="flex-1 bg-white border border-sky-100 rounded-xl px-4 py-2.5 text-sm font-normal text-slate-700 focus:outline-none focus:border-[#10a37f] transition-all" />
+                <input type="text" value={customTaskInput} onChange={(e) => setCustomTaskInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleAddCustomTodo()} placeholder="Type a personal task..." className="flex-1 bg-white border border-sky-100 rounded-xl px-4 py-2.5 text-sm font-normal text-slate-700 focus:outline-none focus:border-[#10a37f] transition-all" />
                 <button onClick={handleAddCustomTodo} className="w-full sm:w-auto bg-[#10a37f] text-white px-5 py-2.5 rounded-xl font-medium hover:bg-[#0e8c6d] transition-all shadow-sm flex items-center justify-center gap-1.5 text-sm">
-                  <Plus size={16} /> Add Task
+                  <Plus size={16} /> Add to Plan
                 </button>
               </div>
             )}
@@ -700,7 +705,7 @@ export default function TimerScreen() {
             {todos.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-8 bg-white/40 rounded-2xl border border-dashed border-sky-200 text-slate-400">
                 <Activity size={24} className="mb-2 opacity-50" />
-                <p className="text-sm font-normal">Workspace is empty. Add a mission.</p>
+                <p className="text-sm font-normal">Your list is empty. Add a topic or custom task to start focusing.</p>
               </div>
             ) : (
               todos.map(todo => {
@@ -765,7 +770,7 @@ export default function TimerScreen() {
         {/* 💪 4. PHYSICAL CORE */}
         <div className="bg-sky-50/40 backdrop-blur-2xl border border-sky-100/60 shadow-sm rounded-3xl p-5 sm:p-6 transition-all duration-300">
           <h2 className="text-xl font-medium text-slate-800 flex items-center gap-2 mb-6 border-b border-sky-100/50 pb-4">
-            <Activity size={20} className="text-slate-400" /> Physical Core
+            <Activity size={20} className="text-slate-400" /> Daily Health & Habits
           </h2>
           
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -773,7 +778,7 @@ export default function TimerScreen() {
               <div className="flex justify-between items-center mb-3">
                 <div className="flex items-center gap-2">
                   <Droplets size={16} className="text-sky-500" />
-                  <span className="text-sm font-medium text-slate-700">Hydration</span>
+                  <span className="text-sm font-medium text-slate-700">Drink Water</span>
                 </div>
                 <span className="text-xs font-medium text-slate-400">{habits.water}/12</span>
               </div>
@@ -794,7 +799,7 @@ export default function TimerScreen() {
               <div className="flex justify-between items-center mb-3">
                 <div className="flex items-center gap-2">
                   <Utensils size={16} className="text-orange-500" />
-                  <span className="text-sm font-medium text-slate-700">Nutrition</span>
+                  <span className="text-sm font-medium text-slate-700">Have Meals</span>
                 </div>
                 <span className="text-xs font-medium text-slate-400">{habits.meal}/4</span>
               </div>
@@ -815,7 +820,7 @@ export default function TimerScreen() {
               <div className="flex justify-between items-center mb-3">
                 <div className="flex items-center gap-2">
                   <BookOpen size={16} className="text-indigo-500" />
-                  <span className="text-sm font-medium text-slate-700">Prayer</span>
+                  <span className="text-sm font-medium text-slate-700">Prayers / Meditation</span>
                 </div>
                 <span className="text-xs font-medium text-slate-400">{habits.prayer}/5</span>
               </div>
@@ -836,7 +841,7 @@ export default function TimerScreen() {
               <button disabled={habits.sleepChecked} onClick={() => updateHabit('sleepChecked', true)} className="flex justify-between items-center cursor-pointer group text-left w-full disabled:cursor-default">
                 <div className="flex items-center gap-2.5">
                   <Moon size={16} className="text-violet-500" />
-                  <span className={`text-sm font-normal transition-colors ${habits.sleepChecked ? 'text-slate-400' : 'text-slate-700 group-hover:text-violet-600'}`}>Sleep (7 Hrs)</span>
+                  <span className={`text-sm font-normal transition-colors ${habits.sleepChecked ? 'text-slate-400' : 'text-slate-700 group-hover:text-violet-600'}`}>Get 7+ Hours of Sleep</span>
                 </div>
                 <div className={`w-5 h-5 rounded-md border transition-all flex items-center justify-center ${habits.sleepChecked ? 'bg-green-500 border-green-500 text-white' : 'bg-slate-50 border-slate-300 group-hover:border-[#10a37f]'}`}>
                   {habits.sleepChecked && <Check size={12} strokeWidth={3} />}
@@ -846,7 +851,7 @@ export default function TimerScreen() {
               <button disabled={habits.exerciseChecked} onClick={() => updateHabit('exerciseChecked', true)} className="flex justify-between items-center cursor-pointer group text-left w-full disabled:cursor-default">
                 <div className="flex items-center gap-2.5">
                   <Activity size={16} className="text-rose-500" />
-                  <span className={`text-sm font-normal transition-colors ${habits.exerciseChecked ? 'text-slate-400' : 'text-slate-700 group-hover:text-rose-600'}`}>Workout (30 Min)</span>
+                  <span className={`text-sm font-normal transition-colors ${habits.exerciseChecked ? 'text-slate-400' : 'text-slate-700 group-hover:text-rose-600'}`}>Exercise (30 Mins)</span>
                 </div>
                 <div className={`w-5 h-5 rounded-md border transition-all flex items-center justify-center ${habits.exerciseChecked ? 'bg-green-500 border-green-500 text-white' : 'bg-slate-50 border-slate-300 group-hover:border-[#10a37f]'}`}>
                   {habits.exerciseChecked && <Check size={12} strokeWidth={3} />}
