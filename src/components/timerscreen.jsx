@@ -1,6 +1,6 @@
 import React, { useState, useContext, useEffect, useRef } from 'react';
 import { initialData } from '../data/initialData';
-import { Droplets, Utensils, Moon, Activity, BookOpen, Plus, Check, Trash2, Play, Pause, GraduationCap, Palette, Users } from 'lucide-react';
+import { Droplets, Utensils, Moon, Activity, BookOpen, Plus, Check, Trash2, Play, Pause, GraduationCap, Palette, Users, Sparkles, Trophy } from 'lucide-react';
 import { ProgressContext } from '../App';
 import { supabase } from '../services/supabase';
 
@@ -33,39 +33,100 @@ export default function TimerScreen() {
   const timerRef = useRef(null);
   const sessionStartRef = useRef(null);
 
-  // 🌟 SYLLABUS POPUP STATE
-  const [syncPopupTask, setSyncPopupTask] = useState(null);
+  // 🌟 POPUP STATES
+  const [syncPopupTask, setSyncPopupTask] = useState(null); 
+  const [milestonePopup, setMilestonePopup] = useState(null); 
+  const [dailyMilestones, setDailyMilestones] = useState({ targets: [], reached: [] });
 
   const [onlineUsers, setOnlineUsers] = useState([]);
   const roomChannelRef = useRef(null);
   const trueDateStr = useRef(new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' }));
 
-  const currentState = useRef({ habits, todos, studySeconds, activeTaskId });
+  const currentState = useRef({ habits, todos, studySeconds, activeTaskId, dailyMilestones });
   useEffect(() => {
-    currentState.current = { habits, todos, studySeconds, activeTaskId };
-  }, [habits, todos, studySeconds, activeTaskId]);
+    currentState.current = { habits, todos, studySeconds, activeTaskId, dailyMilestones };
+  }, [habits, todos, studySeconds, activeTaskId, dailyMilestones]);
+
+  // 🚀 1. BACKGROUND KEEP-ALIVE WORKER
+  useEffect(() => {
+    const workerCode = `
+      let timer;
+      self.onmessage = function(e) {
+        if (e.data === 'start') {
+          timer = setInterval(() => self.postMessage('tick'), 25000);
+        } else if (e.data === 'stop') {
+          clearInterval(timer);
+        }
+      };
+    `;
+    const blob = new Blob([workerCode], { type: 'application/javascript' });
+    const worker = new Worker(URL.createObjectURL(blob));
+
+    worker.postMessage('start');
+    worker.onmessage = () => {
+      if (localStorage.getItem('active_task_id')) {
+        localStorage.setItem('last_tick', Date.now().toString());
+      }
+    };
+
+    return () => {
+      worker.postMessage('stop');
+      worker.terminate();
+    };
+  }, []);
+
+  // 🎲 2. GENERATE LUCKY MILESTONES
+  useEffect(() => {
+    const today = new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' });
+    const savedMilestones = JSON.parse(localStorage.getItem('lucky_milestones') || '{}');
+
+    if (savedMilestones.date !== today) {
+      const t1 = Math.floor(Math.random() * (7200 - 3600 + 1) + 3600); 
+      const t2 = Math.floor(Math.random() * (14400 - 10800 + 1) + 10800); 
+      const t3 = Math.floor(Math.random() * (25200 - 18000 + 1) + 18000); 
+      
+      const newMilestones = { date: today, targets: [t1, t2, t3], reached: [] };
+      localStorage.setItem('lucky_milestones', JSON.stringify(newMilestones));
+      setDailyMilestones(newMilestones);
+    } else {
+      setDailyMilestones(savedMilestones);
+    }
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('academic_group', activeGroup);
     setSelectedSubject('');
     setSelectedChapter('');
+    setSelectedActions(['basic']); // Reset actions when group changes
   }, [activeGroup]);
 
   const filteredSubjects = Object.entries(initialData.academics).filter(
     ([key, data]) => data.groups && data.groups.includes(activeGroup)
   );
 
-  // 🛠️ HELPER TO START INTERVAL (Netflix Logic is here: 7200s limit)
+  // 🛠️ TIMER INTERVAL WITH MILESTONE CHECK
   const startTimerInterval = (startStrTime) => {
     timerRef.current = setInterval(() => {
       const currentNow = Date.now();
       const diff = Math.floor((currentNow - startStrTime) / 1000);
       
-      // 2 HOURS AUTO-PAUSE LOGIC
+      const { todos: currTodos, studySeconds: currStudySecs, activeTaskId: currTaskId, habits: currHabits, dailyMilestones: currMilestones } = currentState.current;
+      const totalTodaySecs = currStudySecs + diff;
+
+      // 🎁 CHECK LUCKY MILESTONES
+      currMilestones.targets.forEach((target) => {
+        if (totalTodaySecs >= target && !currMilestones.reached.includes(target)) {
+          const updatedReached = [...currMilestones.reached, target];
+          const newMState = { ...currMilestones, reached: updatedReached };
+          setDailyMilestones(newMState);
+          localStorage.setItem('lucky_milestones', JSON.stringify(newMState));
+          setMilestonePopup(target);
+        }
+      });
+
+      // 🛑 2 HOURS AUTO-PAUSE LOGIC
       if (diff >= 7200) {
         clearInterval(timerRef.current);
-        const { todos: currTodos, studySeconds: currStudySecs, activeTaskId: currTaskId, habits: currHabits } = currentState.current;
-        
         const newStudySecs = currStudySecs + diff;
         const updatedTodos = currTodos.map(t => t.id === currTaskId ? { ...t, trackedSeconds: (t.trackedSeconds || 0) + diff } : t);
         
@@ -134,7 +195,6 @@ export default function TimerScreen() {
         if (data.study_seconds) finalStudySeconds = parseInt(data.study_seconds, 10);
       }
 
-      // 🔄 SMART RECOVERY ENGINE
       const savedTaskId = localStorage.getItem('active_task_id');
       const savedStart = localStorage.getItem('active_task_start');
       const lastTick = localStorage.getItem('last_tick');
@@ -151,7 +211,7 @@ export default function TimerScreen() {
         } 
         else {
           const sessionSecs = Math.floor((Number(lastTick) - Number(savedStart)) / 1000);
-          const validSecs = Math.min(sessionSecs, 7200); // 7200 Max Guard
+          const validSecs = Math.min(sessionSecs, 7200); 
 
           if (validSecs > 0) {
             if (startStr === trueDateStr.current) {
@@ -344,7 +404,8 @@ export default function TimerScreen() {
     const newTodos = [...todos, newTask];
     setTodos(newTodos);
     syncWorkspaceToSupabase(habits, newTodos);
-    setSelectedChapter(''); setSelectedActions(['basic']);
+    setSelectedChapter(''); 
+    setSelectedActions(['basic']); // Reset to basic after adding
   };
 
   const handleAddCustomTodo = () => {
@@ -356,13 +417,11 @@ export default function TimerScreen() {
     setCustomTaskInput("");
   };
 
-  // 🚀 SYLLABUS SYNC LOGIC
+  // 🚀 CLEAN SYLLABUS SYNC LOGIC
   const handleTodoCheckClick = (todo) => {
-    // If user is trying to mark an academic task as DONE
     if (!todo.isDone && todo.type === 'academic') {
-      setSyncPopupTask(todo); // Open the popup!
+      setSyncPopupTask(todo); 
     } else {
-      // Normal toggle for custom tasks or unchecking
       processTodoStatus(todo.id, false, !todo.isDone); 
     }
   };
@@ -380,7 +439,7 @@ export default function TimerScreen() {
     });
     setTodos(finalTodos);
     syncWorkspaceToSupabase(habits, finalTodos, newStudySecs);
-    setSyncPopupTask(null); // Close popup
+    setSyncPopupTask(null); 
   };
 
   const deleteTodo = (id) => {
@@ -399,6 +458,25 @@ export default function TimerScreen() {
     return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
   };
 
+  // 🧠 DYNAMIC ACTIONS LOGIC based on subject
+  const getAvailableActions = (subjectKey) => {
+    if (!subjectKey) return ['basic', 'cq', 'mcq', 'mastered'];
+    
+    const keyLower = subjectKey.toLowerCase();
+    
+    // English 1st/2nd and ICT: Only basic & mastered
+    if (keyLower.includes('english') || keyLower.includes('ict')) {
+      return ['basic', 'mastered'];
+    }
+    // Bangla 2nd: basic, mcq, mastered (NO CQ)
+    if (keyLower.includes('bangla_2nd') || keyLower.includes('bangla2')) {
+      return ['basic', 'mcq', 'mastered'];
+    }
+    
+    // Default for Math, Physics, Chem, Biology, etc.
+    return ['basic', 'cq', 'mcq', 'mastered'];
+  };
+
   const totalExpectedTasks = todos.length;
   const completedTasks = todos.filter(t => t.isDone).length;
   const progressPercent = totalExpectedTasks === 0 ? 0 : Math.round((completedTasks / totalExpectedTasks) * 100);
@@ -410,23 +488,44 @@ export default function TimerScreen() {
   return (
     <div className="pt-6 pb-24 font-sans text-slate-800 relative">
       
-      {/* 🌟 THE SYLLABUS SYNC POPUP */}
+      {/* 🎁 THE "LUCKY MILESTONE" SURPRISE POPUP */}
+      {milestonePopup && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-transparent animate-in fade-in duration-300">
+          <div className="bg-[#10a37f]/95 backdrop-blur-3xl rounded-[2rem] p-8 shadow-2xl max-w-sm w-full border border-[#0e8c6d] text-center transform transition-transform text-white">
+            <div className="w-16 h-16 mx-auto rounded-full bg-white/20 flex items-center justify-center text-white mb-4 border border-white/30 shadow-inner">
+              <Trophy size={32} />
+            </div>
+            <h3 className="text-2xl font-bold text-white mb-2">Focus Spark!</h3>
+            <p className="text-emerald-50 font-medium mb-6">
+              You've hit a secret daily milestone! <br/> Amazing consistency! 🚀
+            </p>
+            <button 
+              onClick={() => setMilestonePopup(null)} 
+              className="w-full py-3 rounded-xl font-bold text-[#10a37f] bg-white shadow-md hover:bg-emerald-50 transition-all"
+            >
+              Keep Going
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 🌟 THE CLEAN SYLLABUS SYNC POPUP */}
       {syncPopupTask && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white/95 backdrop-blur-xl rounded-[2rem] p-6 shadow-2xl max-w-sm w-full border border-sky-100">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-transparent animate-in fade-in duration-200">
+          <div className="bg-sky-50/95 backdrop-blur-3xl rounded-[2rem] p-6 shadow-2xl max-w-sm w-full border border-sky-200">
             <div className="flex items-center gap-3 mb-5">
-              <div className="w-12 h-12 rounded-full bg-sky-50 flex items-center justify-center text-sky-500 border border-sky-100 shadow-sm">
+              <div className="w-12 h-12 rounded-full bg-white/80 flex items-center justify-center text-sky-500 shadow-sm border border-white">
                 <BookOpen size={24} />
               </div>
               <div>
                 <h3 className="text-xl font-bold text-slate-800 leading-tight">Save to Syllabus?</h3>
-                <p className="text-xs font-medium text-slate-500 mt-0.5">Task completed successfully!</p>
+                <p className="text-xs font-medium text-slate-600 mt-0.5">Task completed successfully!</p>
               </div>
             </div>
             
-            <div className="bg-slate-50/80 p-4 rounded-2xl mb-6 border border-slate-100 shadow-inner">
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">{syncPopupTask.subjectName}</p>
-              <p className="text-[15px] font-semibold text-slate-700 leading-snug">{syncPopupTask.title}</p>
+            <div className="bg-white/70 p-4 rounded-2xl mb-6 border border-white/60 shadow-sm">
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">{syncPopupTask.subjectName}</p>
+              <p className="text-[15px] font-semibold text-slate-800 leading-snug">{syncPopupTask.title}</p>
               <div className="flex flex-wrap gap-1.5 mt-3">
                 {syncPopupTask.actions.map(act => (
                   <span key={act} className="text-[10px] font-bold bg-[#10a37f]/10 text-[#10a37f] border border-[#10a37f]/20 px-2 py-0.5 rounded-md uppercase tracking-wide">
@@ -439,13 +538,13 @@ export default function TimerScreen() {
             <div className="flex gap-3">
               <button 
                 onClick={() => processTodoStatus(syncPopupTask.id, false, true)} 
-                className="flex-1 py-3 rounded-xl text-sm font-semibold text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 transition-all shadow-sm"
+                className="flex-1 py-3 rounded-xl text-sm font-semibold text-slate-600 bg-white/90 border border-white hover:bg-white transition-all shadow-sm"
               >
                 No, Just Done
               </button>
               <button 
                 onClick={() => processTodoStatus(syncPopupTask.id, true, true)} 
-                className="flex-1 py-3 rounded-xl text-sm font-semibold text-white bg-[#10a37f] hover:bg-[#0e8c6d] transition-all shadow-sm"
+                className="flex-1 py-3 rounded-xl text-sm font-semibold text-white bg-[#10a37f] hover:bg-[#0e8c6d] border border-[#10a37f] transition-all shadow-sm"
               >
                 Yes, Sync It
               </button>
@@ -552,7 +651,15 @@ export default function TimerScreen() {
                 </div>
 
                 <div className="flex flex-col sm:flex-row gap-3">
-                  <select className="flex-1 bg-white border border-sky-100 rounded-xl px-3 py-2.5 text-sm font-normal text-slate-700 focus:outline-none focus:border-[#10a37f] transition-all" value={selectedSubject} onChange={(e) => { setSelectedSubject(e.target.value); setSelectedChapter(''); }}>
+                  <select 
+                    className="flex-1 bg-white border border-sky-100 rounded-xl px-3 py-2.5 text-sm font-normal text-slate-700 focus:outline-none focus:border-[#10a37f] transition-all" 
+                    value={selectedSubject} 
+                    onChange={(e) => { 
+                      setSelectedSubject(e.target.value); 
+                      setSelectedChapter(''); 
+                      setSelectedActions(['basic']); // Reset selection
+                    }}
+                  >
                     <option value="">Select Subject...</option>
                     {filteredSubjects.map(([key, subject]) => <option key={key} value={key}>{subject.name}</option>)}
                   </select>
@@ -563,8 +670,15 @@ export default function TimerScreen() {
                 </div>
                 <div className="flex flex-col sm:flex-row justify-between items-center gap-4 pt-2 border-t border-sky-50">
                   <div className="flex flex-wrap gap-2 w-full sm:w-auto">
-                    {['basic', 'cq', 'mcq', 'mastered'].map(action => (
-                      <button key={action} onClick={() => toggleActionSelection(action)} className={`px-3 py-1.5 text-xs font-medium uppercase tracking-wide rounded-lg transition-all shadow-sm ${selectedActions.includes(action) ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50 hover:text-slate-700'}`}>{action}</button>
+                    {/* 🚀 DYNAMIC ACTIONS MAPPED HERE */}
+                    {getAvailableActions(selectedSubject).map(action => (
+                      <button 
+                        key={action} 
+                        onClick={() => toggleActionSelection(action)} 
+                        className={`px-3 py-1.5 text-xs font-medium uppercase tracking-wide rounded-lg transition-all shadow-sm ${selectedActions.includes(action) ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50 hover:text-slate-700'}`}
+                      >
+                        {action}
+                      </button>
                     ))}
                   </div>
                   <button onClick={handleAddAcademicTodo} className="w-full sm:w-auto bg-[#10a37f] text-white px-5 py-2 rounded-xl hover:bg-[#0e8c6d] transition-all shadow-sm font-medium flex items-center justify-center gap-1.5 text-sm">
@@ -597,7 +711,6 @@ export default function TimerScreen() {
                   <div key={todo.id} className={`bg-white border rounded-2xl p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition-all duration-300 ${todo.isDone ? 'border-transparent bg-slate-50/50 opacity-70' : isRunning ? 'border-[#10a37f]/40 shadow-sm' : 'border-sky-50 hover:shadow-sm hover:border-sky-100'}`}>
                     
                     <div className="flex items-start md:items-center gap-3 flex-1 w-full">
-                      {/* 🚀 UPDATED: CHECK BUTTON NOW OPENS POPUP IF APPLICABLE */}
                       <button onClick={() => handleTodoCheckClick(todo)} className={`mt-0.5 md:mt-0 w-5 h-5 flex-shrink-0 rounded-md border flex items-center justify-center transition-all duration-300 ${todo.isDone ? 'bg-green-500 border-green-500 text-white' : 'bg-transparent border-slate-300 hover:border-[#10a37f]'}`}>
                         {todo.isDone && <Check size={12} strokeWidth={3} />}
                       </button>

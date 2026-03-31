@@ -39,6 +39,25 @@ export default function Syllabus() {
     manuallyUpdateSyllabus(subjectKey, chapterIndex, action);
   };
 
+  // 🧠 DYNAMIC ACTIONS LOGIC based on subject
+  const getAvailableActions = (subjectKey) => {
+    if (!subjectKey) return ['basic', 'cq', 'mcq', 'mastered'];
+    
+    const keyLower = subjectKey.toLowerCase();
+    
+    // English 1st/2nd and ICT: Only basic & mastered
+    if (keyLower.includes('english') || keyLower.includes('ict')) {
+      return ['basic', 'mastered'];
+    }
+    // Bangla 2nd: basic, mcq, mastered (NO CQ)
+    if (keyLower.includes('bangla_2nd') || keyLower.includes('bangla2')) {
+      return ['basic', 'mcq', 'mastered'];
+    }
+    
+    // Default for Math, Physics, Chem, Biology, etc.
+    return ['basic', 'cq', 'mcq', 'mastered'];
+  };
+
   return (
     <div className="pt-6 pb-24 font-sans text-slate-800">
       <div className="max-w-4xl mx-auto space-y-6 px-2">
@@ -67,6 +86,7 @@ export default function Syllabus() {
           {filteredSubjects.map(([key, subject]) => {
             const progressPercentage = calculateSubjectProgress(key, subject.chapters);
             const isExpanded = expandedSubject[key];
+            const subjectActions = getAvailableActions(key); // Fetching specific actions for the subject
 
             return (
               <div key={key} className="bg-sky-50/40 backdrop-blur-2xl border border-sky-100/60 shadow-sm rounded-3xl overflow-hidden transition-all duration-300">
@@ -115,7 +135,8 @@ export default function Syllabus() {
                               </div>
                             ) : (
                               <div className="flex flex-wrap gap-2">
-                                {['basic', 'cq', 'mcq', 'mastered'].map((action) => (
+                                {/* 🚀 DYNAMIC ACTIONS IMPLEMENTED HERE */}
+                                {subjectActions.map((action) => (
                                   <button 
                                     key={action}
                                     onClick={() => handleActionToggle(key, index, action)}

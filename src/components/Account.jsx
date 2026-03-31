@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useContext } from 'react';
 import { ProgressContext } from '../App';
 import { supabase } from '../services/supabase';
-import { Mail, LogOut, RefreshCw, Code, Settings, Edit2, Check, Camera, Lock, User } from 'lucide-react';
+import { Mail, LogOut, RefreshCw, Code, Settings, Edit2, Check, Camera, Lock, User, Trophy, Medal, Zap } from 'lucide-react';
 
 export default function Account() {
   const { userProfile } = useContext(ProgressContext);
@@ -163,13 +163,23 @@ export default function Account() {
 
   const defaultAvatar = `https://ui-avatars.com/api/?name=${userName || 'S'}&background=e2e8f0&color=1e293b&font-size=0.4&bold=true`;
 
+  // 🏆 RANK TIERS DATA
+  const rankTiers = [
+    { name: 'Legend', hours: '250h+', xp: '24,750+ XP', color: 'text-purple-600', bg: 'bg-purple-50', border: 'border-purple-200' },
+    { name: 'Emperor', hours: '150 - 250h', xp: '14,850 XP', color: 'text-rose-600', bg: 'bg-rose-50', border: 'border-rose-200' },
+    { name: 'Prime', hours: '80 - 150h', xp: '7,920 XP', color: 'text-indigo-600', bg: 'bg-indigo-50', border: 'border-indigo-200' },
+    { name: 'Elite', hours: '40 - 80h', xp: '3,960 XP', color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-200' },
+    { name: 'Platinum', hours: '15 - 40h', xp: '1,485 XP', color: 'text-sky-600', bg: 'bg-sky-50', border: 'border-sky-200' },
+    { name: 'Silver', hours: '0 - 15h', xp: '0 XP', color: 'text-slate-500', bg: 'bg-slate-50', border: 'border-slate-200' }
+  ];
+
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center text-slate-500 font-medium">Loading Workspace...</div>;
   }
 
   return (
-    <div className="pt-6 font-sans text-[#2d333a] pb-10 flex flex-col min-h-full">
-      <div className="max-w-2xl mx-auto space-y-6 px-2 w-full flex-grow">
+    <div className="pt-6 font-sans text-[#2d333a] pb-10 flex flex-col min-h-full bg-slate-50/50">
+      <div className="max-w-2xl mx-auto space-y-6 px-3 w-full flex-grow">
         
         <div className="text-center mb-8">
           <h1 className="text-2xl font-bold text-slate-800 tracking-tight flex items-center justify-center gap-2">
@@ -177,8 +187,8 @@ export default function Account() {
           </h1>
         </div>
         
+        {/* 🌟 PROFILE SECTION */}
         <div className="bg-white border border-slate-200 shadow-sm rounded-[1.5rem] flex flex-col items-center text-center p-8 relative transition-all">
-          
           <div className="relative mb-6 group cursor-pointer" onClick={() => fileInputRef.current.click()}>
             <div className="h-24 w-24 bg-slate-50 border border-slate-200 rounded-full overflow-hidden flex items-center justify-center transition-all duration-300 group-hover:shadow-md">
               <img 
@@ -232,6 +242,38 @@ export default function Account() {
           </div>
         </div>
 
+        {/* 🏆 RANK PROGRESSION SYSTEM */}
+        <div className="bg-white border border-slate-200 shadow-sm rounded-[1.5rem] p-5 sm:p-6 transition-all">
+          <div className="flex items-center gap-2 mb-5 border-b border-slate-100 pb-4">
+            <Trophy size={20} className="text-[#10a37f]" />
+            <h2 className="text-lg font-semibold text-slate-800 tracking-tight">Rank Tiers</h2>
+          </div>
+          
+          <div className="space-y-3">
+            {rankTiers.map((rank, idx) => (
+              <div key={idx} className="flex items-center justify-between p-3.5 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-white hover:shadow-sm hover:border-slate-200 transition-all group">
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center border shadow-sm ${rank.bg} ${rank.border} ${rank.color}`}>
+                    <Medal size={18} />
+                  </div>
+                  <div>
+                    <p className={`text-[14px] font-bold ${rank.color}`}>{rank.name}</p>
+                    <p className="text-[10px] font-medium text-slate-500 flex items-center gap-1 mt-0.5">
+                      <Zap size={10} className="text-slate-400" /> {rank.hours} Focus
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-[12px] font-bold text-slate-700 bg-white border border-slate-200 px-2.5 py-1 rounded-lg shadow-sm">
+                    {rank.xp}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* ⚙️ SETTINGS ACTIONS */}
         <div className="bg-white border border-slate-200 shadow-sm rounded-[1.5rem] p-3 space-y-1 transition-all">
           <div className="flex justify-between items-center hover:bg-slate-50 p-4 rounded-[1rem] transition-all cursor-pointer">
             <div className="flex items-center gap-4">
