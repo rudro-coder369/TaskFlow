@@ -94,16 +94,15 @@ export default function Leaderboard() {
   const fetchLeaderboard = async (dateString) => {
     setLoading(true);
     
-    // ১. আজকে যারা পড়েছে তাদের লিস্ট নেওয়া
+    // 🚀 Fetching self_study_seconds and class_seconds
     const { data: todayData, error } = await supabase
       .from('daily_logs')
-      .select('user_id, study_seconds, profiles(username)')
+      .select('user_id, study_seconds, self_study_seconds, class_seconds, profiles(username)')
       .eq('date_str', dateString)
       .order('study_seconds', { ascending: false })
       .limit(50);
       
     if (todayData && !error) {
-      // ২. গত ৩০ দিনের ডেটা নিয়ে আসা (সবার রিয়েল লেভেল হিসাব করার জন্য)
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
       
@@ -120,7 +119,6 @@ export default function Leaderboard() {
         });
       }
 
-      // ৩. আজকের লিডারবোর্ডের সাথে লেভেল ডেটা মার্জ করা
       const finalLeaders = todayData.map(user => {
         const totalSecs = userTotals[user.user_id] || parseInt(user.study_seconds || 0, 10);
         return {
@@ -147,7 +145,6 @@ export default function Leaderboard() {
     return `${s}s`;
   };
 
-  // ✂️ নাম কাটার লজিক: স্পেসের আগের অংশটুকু নিবে
   const formatName = (name) => {
     if (!name) return "Scholar";
     return name.trim().split(' ')[0].charAt(0).toUpperCase() + name.trim().split(' ')[0].slice(1).toLowerCase();
@@ -170,7 +167,6 @@ export default function Leaderboard() {
   return (
     <div className="pt-6 font-sans text-slate-800 pb-24 px-3 relative">
       
-      {/* 🚀 INJECTING CSS TO HIDE SCROLLBAR */}
       <style dangerouslySetInnerHTML={{__html: `
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
@@ -185,7 +181,7 @@ export default function Leaderboard() {
           
           <p className="text-slate-500 font-normal mt-2.5 max-w-lg mx-auto text-sm sm:text-base leading-relaxed">
             Compete with peers, push your limits, and climb the ranks. 
-            <br className="hidden sm:block" /> The leaderboard resets every night at <span className="font-semibold text-slate-700">12:00 AM</span>. Make today count! 
+            <br className="hidden sm:block" /> The leaderboard resets every night at <span className="font-semibold text-slate-700">12:00 AM</span>. Make today count! 🚀
           </p>
           
           <div className="inline-flex items-center gap-2 mt-5 bg-sky-50/60 border border-sky-100 px-4 py-2 rounded-full shadow-sm text-sm font-medium text-slate-600 transition-all">
@@ -210,7 +206,6 @@ export default function Leaderboard() {
             <span className="w-24 sm:w-32 text-right">Focus Time</span>
           </div>
 
-          {/* ADDED "no-scrollbar" class here */}
           <div className="p-3 sm:p-4 space-y-2.5 max-h-[60vh] overflow-y-auto no-scrollbar">
             {!isTimeSynced || loading ? (
                 <div className="flex justify-center py-10">
@@ -224,7 +219,7 @@ export default function Leaderboard() {
               </div>
             ) : (
               leaders.map((user, index) => {
-                const stats = calculateStats(user.total_30d_seconds); // Calculate their real level
+                const stats = calculateStats(user.total_30d_seconds);
                 
                 return (
                   <div key={index} className="flex justify-between items-center p-3.5 sm:p-4 rounded-[1.25rem] bg-white border border-sky-50 shadow-sm transition-all hover:border-[#10a37f]/30">
@@ -233,12 +228,24 @@ export default function Leaderboard() {
                       {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}`}
                     </span>
                     
-                    {/* 🛠️ User Info Section Updated */}
                     <div className="flex-1 ml-2 sm:ml-4 min-w-0">
-                      <p className="font-bold text-slate-800 text-[14px] sm:text-[15px] truncate leading-tight">
-                        {formatName(user.profiles?.username)}
-                      </p>
-                      <div className="flex gap-1.5 mt-1">
+                      {/* 🚀 Username & Compact Breakdown in Flex Wrap */}
+                      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                        <p className="font-bold text-slate-800 text-[14px] sm:text-[15px] truncate leading-tight max-w-full">
+                          {formatName(user.profiles?.username)}
+                        </p>
+                        
+                        {(user.self_study_seconds > 0 || user.class_seconds > 0) && (
+                          <span className="text-[10px] font-semibold text-slate-400 whitespace-nowrap">
+                            {user.self_study_seconds > 0 ? `slf ${formatStudyTime(user.self_study_seconds)}` : ''}
+                            {user.self_study_seconds > 0 && user.class_seconds > 0 ? ' | ' : ''}
+                            {user.class_seconds > 0 ? `cls ${formatStudyTime(user.class_seconds)}` : ''}
+                          </span>
+                        )}
+                      </div>
+                      
+                      {/* Level and Rank Badges */}
+                      <div className="flex flex-wrap gap-1.5 mt-1">
                         <span className="text-[9px] font-bold text-slate-500 bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded-md leading-none">
                           Lvl {stats.level}
                         </span>
@@ -248,7 +255,7 @@ export default function Leaderboard() {
                       </div>
                     </div>
                     
-                    <span className="w-24 sm:w-32 text-right font-mono tracking-tight tabular-nums font-bold text-emerald-700 bg-emerald-100/80 px-3 py-1.5 rounded-full border border-emerald-200 shadow-inner">
+                    <span className="w-24 sm:w-32 text-right font-mono tracking-tight tabular-nums font-bold text-emerald-700 bg-emerald-100/80 px-3 py-1.5 rounded-full border border-emerald-200 shadow-inner flex flex-col justify-center items-end">
                       {formatStudyTime(user.study_seconds)}
                     </span>
                     

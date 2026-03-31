@@ -18,7 +18,12 @@ export default function TimerScreen() {
 
   const [habits, setHabits] = useState({ water: 0, meal: 0, prayer: 0, sleepChecked: false, exerciseChecked: false });
   const [todos, setTodos] = useState([]);
+  
+  // 🕒 TIMERS
   const [studySeconds, setStudySeconds] = useState(0); 
+  const [selfStudySeconds, setSelfStudySeconds] = useState(0); 
+  const [classSeconds, setClassSeconds] = useState(0); 
+
   const [loadingData, setLoadingData] = useState(true);
   
   const [taskMode, setTaskMode] = useState('academic'); 
@@ -27,6 +32,9 @@ export default function TimerScreen() {
   const [selectedChapter, setSelectedChapter] = useState('');
   const [selectedActions, setSelectedActions] = useState(['basic']); 
   const [customTaskInput, setCustomTaskInput] = useState("");
+  
+  // 📚 STUDY TYPE SELECTION (Self Study vs Class)
+  const [newTaskStudyType, setNewTaskStudyType] = useState('self'); 
 
   const [activeTaskId, setActiveTaskId] = useState(null);
   const [liveSeconds, setLiveSeconds] = useState(0);
@@ -41,12 +49,12 @@ export default function TimerScreen() {
   const [onlineUsers, setOnlineUsers] = useState([]);
   const trueDateStr = useRef(new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' }));
 
-  const currentState = useRef({ habits, todos, studySeconds, activeTaskId, dailyMilestones });
+  const currentState = useRef({ habits, todos, studySeconds, selfStudySeconds, classSeconds, activeTaskId, dailyMilestones });
   useEffect(() => {
-    currentState.current = { habits, todos, studySeconds, activeTaskId, dailyMilestones };
-  }, [habits, todos, studySeconds, activeTaskId, dailyMilestones]);
+    currentState.current = { habits, todos, studySeconds, selfStudySeconds, classSeconds, activeTaskId, dailyMilestones };
+  }, [habits, todos, studySeconds, selfStudySeconds, classSeconds, activeTaskId, dailyMilestones]);
 
-  // 🔔 REQUEST NOTIFICATION PERMISSION ON MOUNT
+  // 🔔 REQUEST NOTIFICATION PERMISSION
   useEffect(() => {
     if ("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") {
       Notification.requestPermission();
@@ -81,11 +89,8 @@ export default function TimerScreen() {
 
   useEffect(() => {
     fetchLiveUsers();
-
     const dbLiveRoomSub = supabase.channel('live_room_db')
-      .on('postgres', { event: 'UPDATE', schema: 'public', table: 'profiles' }, () => {
-        fetchLiveUsers();
-      })
+      .on('postgres', { event: 'UPDATE', schema: 'public', table: 'profiles' }, () => fetchLiveUsers())
       .subscribe();
 
     return () => {
@@ -123,16 +128,15 @@ export default function TimerScreen() {
     ([key, data]) => data.groups && data.groups.includes(activeGroup)
   );
 
-  // 🛠️ TIMER INTERVAL WITH MILESTONE CHECK
+  // 🛠️ TIMER INTERVAL WITH MILESTONE CHECK & CATEGORY TIME LOGIC
   const startTimerInterval = (startStrTime) => {
     timerRef.current = setInterval(() => {
       const currentNow = Date.now();
       const diff = Math.floor((currentNow - startStrTime) / 1000);
       
-      const { todos: currTodos, studySeconds: currStudySecs, activeTaskId: currTaskId, habits: currHabits, dailyMilestones: currMilestones } = currentState.current;
+      const { todos: currTodos, studySeconds: currStudySecs, selfStudySeconds: currSelf, classSeconds: currClass, activeTaskId: currTaskId, habits: currHabits, dailyMilestones: currMilestones } = currentState.current;
       const totalTodaySecs = currStudySecs + diff;
 
-      // 🎁 CHECK LUCKY MILESTONES
       currMilestones.targets.forEach((target) => {
         if (totalTodaySecs >= target && !currMilestones.reached.includes(target)) {
           const updatedReached = [...currMilestones.reached, target];
@@ -143,13 +147,21 @@ export default function TimerScreen() {
         }
       });
 
-      // 🛑 2 HOURS AUTO-PAUSE LOGIC WITH NOTIFICATION & SOUND
+      // 🛑 2 HOURS AUTO-PAUSE LOGIC
       if (diff >= 7200) {
         clearInterval(timerRef.current);
         const newStudySecs = currStudySecs + diff;
+        const activeTask = currTodos.find(t => t.id === currTaskId);
+        const sType = activeTask?.studyType || 'self';
+        
+        const newSelf = currSelf + (sType === 'self' ? diff : 0);
+        const newClass = currClass + (sType === 'class' ? diff : 0);
+
         const updatedTodos = currTodos.map(t => t.id === currTaskId ? { ...t, trackedSeconds: (t.trackedSeconds || 0) + diff } : t);
         
         setStudySeconds(newStudySecs);
+        setSelfStudySeconds(newSelf);
+        setClassSeconds(newClass);
         setTodos(updatedTodos);
         setActiveTaskId(null);
         setLiveSeconds(0);
@@ -159,16 +171,14 @@ export default function TimerScreen() {
         localStorage.removeItem('active_task_start');
         localStorage.removeItem('last_tick');
         
-        syncWorkspaceToSupabase(currHabits, updatedTodos, newStudySecs);
-        updateDatabasePresence(null); // Remove from live room
+        syncWorkspaceToSupabase(currHabits, updatedTodos, newStudySecs, newSelf, newClass);
+        updateDatabasePresence(null); 
         
-        // Play Sound
         try {
           const audio = new Audio('https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg');
           audio.play();
-        } catch(e) { console.log("Sound play error"); }
+        } catch(e) {}
 
-        // Show Notification
         if ("Notification" in window && Notification.permission === "granted") {
           new Notification("⏳ Focus Limit Reached!", {
             body: "You've studied for 2 hours straight. Timer auto-paused. Take a break!",
@@ -183,7 +193,7 @@ export default function TimerScreen() {
     }, 1000);
   };
 
-  const syncWorkspaceToSupabase = async (newHabits, newTodos, overrideStudySeconds = null) => {
+  const syncWorkspaceToSupabase = async (newHabits, newTodos, overrideStudySeconds = null, overrideSelf = null, overrideClass = null) => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
@@ -191,7 +201,10 @@ export default function TimerScreen() {
         user_id: session.user.id, date_str: trueDateStr.current, 
         water: newHabits.water, meal: newHabits.meal, prayer: newHabits.prayer,
         sleep: newHabits.sleepChecked, workout: newHabits.exerciseChecked,
-        tasks_completed: newTodos.filter(t => t.isDone).length, todos: newTodos, study_seconds: overrideStudySeconds !== null ? overrideStudySeconds : studySeconds 
+        tasks_completed: newTodos.filter(t => t.isDone).length, todos: newTodos, 
+        study_seconds: overrideStudySeconds !== null ? overrideStudySeconds : studySeconds,
+        self_study_seconds: overrideSelf !== null ? overrideSelf : selfStudySeconds,
+        class_seconds: overrideClass !== null ? overrideClass : classSeconds
       };
       await supabase.from('daily_logs').upsert(payload, { onConflict: 'user_id, date_str' });
     } catch (error) {
@@ -220,6 +233,8 @@ export default function TimerScreen() {
       let finalHabits = { water: 0, meal: 0, prayer: 0, sleepChecked: false, exerciseChecked: false };
       let finalTodos = [];
       let finalStudySeconds = 0;
+      let finalSelf = 0;
+      let finalClass = 0;
 
       if (data && !error) {
         finalHabits = {
@@ -228,6 +243,8 @@ export default function TimerScreen() {
         };
         if (data.todos) finalTodos = data.todos;
         if (data.study_seconds) finalStudySeconds = parseInt(data.study_seconds, 10);
+        if (data.self_study_seconds) finalSelf = parseInt(data.self_study_seconds, 10);
+        if (data.class_seconds) finalClass = parseInt(data.class_seconds, 10);
       }
 
       // 🔄 SMART RECOVERY ENGINE
@@ -252,8 +269,13 @@ export default function TimerScreen() {
           const validSecs = Math.min(sessionSecs, 7200); 
 
           if (validSecs > 0) {
+            const resumedTask = finalTodos.find(t => t.id === Number(savedTaskId));
+            const sType = resumedTask?.studyType || 'self';
+
             if (startStr === trueDateStr.current) {
               finalStudySeconds += validSecs;
+              if (sType === 'class') finalClass += validSecs; else finalSelf += validSecs;
+
               finalTodos = finalTodos.map(t => 
                 t.id === Number(savedTaskId) ? { ...t, trackedSeconds: (t.trackedSeconds || 0) + validSecs } : t
               );
@@ -262,7 +284,8 @@ export default function TimerScreen() {
                 user_id: session.user.id, date_str: trueDateStr.current, 
                 water: finalHabits.water, meal: finalHabits.meal, prayer: finalHabits.prayer,
                 sleep: finalHabits.sleepChecked, workout: finalHabits.exerciseChecked,
-                tasks_completed: finalTodos.filter(t => t.isDone).length, todos: finalTodos, study_seconds: finalStudySeconds 
+                tasks_completed: finalTodos.filter(t => t.isDone).length, todos: finalTodos, 
+                study_seconds: finalStudySeconds, self_study_seconds: finalSelf, class_seconds: finalClass
               }, { onConflict: 'user_id, date_str' });
 
             } else {
@@ -270,8 +293,11 @@ export default function TimerScreen() {
               if (oldData) {
                   const oldTodos = (oldData.todos || []).map(t => t.id === Number(savedTaskId) ? { ...t, trackedSeconds: (t.trackedSeconds || 0) + validSecs } : t);
                   const oldStudySecs = parseInt(oldData.study_seconds || 0, 10) + validSecs;
+                  const oldSelf = parseInt(oldData.self_study_seconds || 0, 10) + (sType === 'self' ? validSecs : 0);
+                  const oldClass = parseInt(oldData.class_seconds || 0, 10) + (sType === 'class' ? validSecs : 0);
+                  
                   await supabase.from('daily_logs').upsert({
-                     ...oldData, todos: oldTodos, study_seconds: oldStudySecs
+                     ...oldData, todos: oldTodos, study_seconds: oldStudySecs, self_study_seconds: oldSelf, class_seconds: oldClass
                   }, { onConflict: 'user_id, date_str' });
               }
             }
@@ -286,6 +312,8 @@ export default function TimerScreen() {
       setHabits(finalHabits);
       setTodos(finalTodos);
       setStudySeconds(finalStudySeconds);
+      setSelfStudySeconds(finalSelf);
+      setClassSeconds(finalClass);
       setLoadingData(false);
     };
 
@@ -302,13 +330,20 @@ export default function TimerScreen() {
       const currentBDDate = new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' });
 
       if (currentBDDate !== trueDateStr.current) {
-        const { habits: currHabits, todos: currTodos, studySeconds: currStudySecs, activeTaskId: currActiveTask } = currentState.current;
+        const { habits: currHabits, todos: currTodos, studySeconds: currStudySecs, selfStudySeconds: currSelf, classSeconds: currClass, activeTaskId: currActiveTask } = currentState.current;
         let oldStudySecs = currStudySecs;
+        let oldSelf = currSelf;
+        let oldClass = currClass;
         let oldTodos = [...currTodos];
 
         if (currActiveTask && sessionStartRef.current) {
           const sessionSecs = Math.floor((Date.now() - sessionStartRef.current) / 1000);
           oldStudySecs += sessionSecs;
+          
+          const task = oldTodos.find(t => t.id === currActiveTask);
+          const sType = task?.studyType || 'self';
+          if (sType === 'class') oldClass += sessionSecs; else oldSelf += sessionSecs;
+
           oldTodos = oldTodos.map(t => t.id === currActiveTask ? { ...t, trackedSeconds: (t.trackedSeconds || 0) + sessionSecs } : t);
         }
 
@@ -319,7 +354,8 @@ export default function TimerScreen() {
             user_id: session.user.id, date_str: trueDateStr.current, 
             water: currHabits.water, meal: currHabits.meal, prayer: currHabits.prayer,
             sleep: currHabits.sleepChecked, workout: currHabits.exerciseChecked,
-            tasks_completed: oldTodos.filter(t => t.isDone).length, todos: oldTodos, study_seconds: oldStudySecs 
+            tasks_completed: oldTodos.filter(t => t.isDone).length, todos: oldTodos, 
+            study_seconds: oldStudySecs, self_study_seconds: oldSelf, class_seconds: oldClass 
           }, { onConflict: 'user_id, date_str' });
         };
         saveOldDayData();
@@ -328,6 +364,8 @@ export default function TimerScreen() {
         setHabits({ water: 0, meal: 0, prayer: 0, sleepChecked: false, exerciseChecked: false });
         setTodos(oldTodos.map(t => ({ ...t, trackedSeconds: 0, isDone: false })));
         setStudySeconds(0);
+        setSelfStudySeconds(0);
+        setClassSeconds(0);
 
         if (currActiveTask) {
           setLiveSeconds(0);
@@ -363,6 +401,8 @@ export default function TimerScreen() {
 
   const getSafePauseData = (targetTaskId) => {
     let newStudySecs = studySeconds;
+    let newSelf = selfStudySeconds;
+    let newClass = classSeconds;
     let updatedTodos = [...todos];
 
     if (activeTaskId === targetTaskId) {
@@ -370,9 +410,15 @@ export default function TimerScreen() {
       const sessionSecs = Math.floor((Date.now() - sessionStartRef.current) / 1000);
       newStudySecs += sessionSecs;
       
+      const task = updatedTodos.find(t => t.id === targetTaskId);
+      const sType = task?.studyType || 'self';
+      if (sType === 'class') newClass += sessionSecs; else newSelf += sessionSecs;
+      
       updatedTodos = updatedTodos.map(t => t.id === targetTaskId ? { ...t, trackedSeconds: (t.trackedSeconds || 0) + sessionSecs } : t);
       
       setStudySeconds(newStudySecs);
+      setSelfStudySeconds(newSelf);
+      setClassSeconds(newClass);
       setActiveTaskId(null);
       setLiveSeconds(0);
       sessionStartRef.current = null;
@@ -382,14 +428,14 @@ export default function TimerScreen() {
       localStorage.removeItem('last_tick');
       updateDatabasePresence(null);
     }
-    return { newStudySecs, updatedTodos };
+    return { newStudySecs, newSelf, newClass, updatedTodos };
   };
 
   const handlePause = (taskId) => {
     if (activeTaskId !== taskId) return;
-    const { newStudySecs, updatedTodos } = getSafePauseData(taskId);
+    const { newStudySecs, newSelf, newClass, updatedTodos } = getSafePauseData(taskId);
     setTodos(updatedTodos);
-    syncWorkspaceToSupabase(habits, updatedTodos, newStudySecs);
+    syncWorkspaceToSupabase(habits, updatedTodos, newStudySecs, newSelf, newClass);
   };
 
   const formatTime = (totalSeconds) => {
@@ -410,7 +456,7 @@ export default function TimerScreen() {
   const handleAddAcademicTodo = () => {
     if (!selectedSubject || !selectedChapter || selectedActions.length === 0) return;
     const newTask = {
-      id: Date.now(), type: 'academic', subjectKey: selectedSubject,
+      id: Date.now(), type: 'academic', studyType: newTaskStudyType, subjectKey: selectedSubject,
       subjectName: initialData.academics[selectedSubject].name, chapterIndex: selectedChapter,
       actions: selectedActions, 
       title: `${initialData.academics[selectedSubject].chapters[selectedChapter]}`, 
@@ -425,14 +471,13 @@ export default function TimerScreen() {
 
   const handleAddCustomTodo = () => {
     if (customTaskInput.trim() === "") return;
-    const newTask = { id: Date.now(), type: 'custom', title: customTaskInput, actions: ['task'], isDone: false, trackedSeconds: 0 };
+    const newTask = { id: Date.now(), type: 'custom', studyType: newTaskStudyType, title: customTaskInput, actions: ['task'], isDone: false, trackedSeconds: 0 };
     const newTodos = [...todos, newTask];
     setTodos(newTodos);
     syncWorkspaceToSupabase(habits, newTodos);
     setCustomTaskInput("");
   };
 
-  // 🚀 CLEAN SYLLABUS SYNC LOGIC
   const handleTodoCheckClick = (todo) => {
     if (!todo.isDone && todo.type === 'academic') {
       setSyncPopupTask(todo); 
@@ -442,7 +487,7 @@ export default function TimerScreen() {
   };
 
   const processTodoStatus = (id, shouldSyncSyllabus, forceStatus) => {
-    const { newStudySecs, updatedTodos } = getSafePauseData(id); 
+    const { newStudySecs, newSelf, newClass, updatedTodos } = getSafePauseData(id); 
     const finalTodos = updatedTodos.map(t => {
       if (t.id === id) {
         if (shouldSyncSyllabus && t.type === 'academic') {
@@ -453,15 +498,15 @@ export default function TimerScreen() {
       return t;
     });
     setTodos(finalTodos);
-    syncWorkspaceToSupabase(habits, finalTodos, newStudySecs);
+    syncWorkspaceToSupabase(habits, finalTodos, newStudySecs, newSelf, newClass);
     setSyncPopupTask(null); 
   };
 
   const deleteTodo = (id) => {
-    const { newStudySecs, updatedTodos } = getSafePauseData(id); 
+    const { newStudySecs, newSelf, newClass, updatedTodos } = getSafePauseData(id); 
     const finalTodos = updatedTodos.filter(t => t.id !== id);
     setTodos(finalTodos);
-    syncWorkspaceToSupabase(habits, finalTodos, newStudySecs);
+    syncWorkspaceToSupabase(habits, finalTodos, newStudySecs, newSelf, newClass);
   };
 
   const toggleActionSelection = (action) => {
@@ -473,7 +518,6 @@ export default function TimerScreen() {
     return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
   };
 
-  // 🧠 DYNAMIC ACTIONS LOGIC based on subject
   const getAvailableActions = (subjectKey) => {
     if (!subjectKey) return ['basic', 'cq', 'mcq', 'mastered'];
     const keyLower = subjectKey.toLowerCase();
@@ -606,7 +650,7 @@ export default function TimerScreen() {
           </div>
         </div>
 
-        {/* 📊 PROGRESS BAR */}
+        {/* 📊 PROGRESS BAR WITH BREAKDOWN */}
         <div className="bg-sky-50/40 backdrop-blur-2xl border border-sky-100/60 shadow-sm rounded-3xl p-5 sm:p-6 transition-all duration-300">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4">
             <div className="w-full md:w-1/2">
@@ -617,6 +661,13 @@ export default function TimerScreen() {
               <div className="h-2 w-full bg-sky-100 rounded-full overflow-hidden shadow-inner">
                 <div className="h-full bg-[#10a37f] transition-all duration-1000 ease-out" style={{ width: `${progressPercent}%` }} />
               </div>
+              
+              {/* 🚀 LIVE CATEGORY BREAKDOWN TEXT */}
+              <div className="flex justify-between items-center mt-3 border-t border-sky-100/60 pt-2">
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1.5"><BookOpen size={12} className="text-[#10a37f]"/> Self Study: {formatTime(selfStudySeconds)}</span>
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1.5"><GraduationCap size={12} className="text-indigo-500"/> Class/Coaching: {formatTime(classSeconds)}</span>
+              </div>
+
             </div>
 
             {activeTaskId && (
@@ -644,6 +695,18 @@ export default function TimerScreen() {
           </div>
 
           <div className="bg-white/60 border border-sky-50 rounded-2xl p-4 shadow-sm mb-6">
+            
+            {/* 📚 STUDY MODE SELECTION (Self Study / Class) */}
+            <div className="flex flex-wrap gap-2 mb-4 pb-4 border-b border-sky-50/50">
+              <span className="w-full text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Study Mode</span>
+              <button onClick={() => setNewTaskStudyType('self')} className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[13px] font-semibold border transition-all ${newTaskStudyType === 'self' ? 'bg-[#10a37f]/10 text-[#10a37f] border-[#10a37f]/30 shadow-sm' : 'bg-white text-slate-500 border-sky-100 hover:bg-slate-50'}`}>
+                <BookOpen size={14} /> Self Study
+              </button>
+              <button onClick={() => setNewTaskStudyType('class')} className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[13px] font-semibold border transition-all ${newTaskStudyType === 'class' ? 'bg-indigo-50 text-indigo-600 border-indigo-200 shadow-sm' : 'bg-white text-slate-500 border-sky-100 hover:bg-slate-50'}`}>
+                <GraduationCap size={14} /> Class / Coaching
+              </button>
+            </div>
+
             {taskMode === 'academic' ? (
               <div className="space-y-3">
                 <div className="flex bg-slate-100/80 p-1 rounded-xl shadow-inner border border-slate-200/50 w-full sm:w-fit">
@@ -711,6 +774,7 @@ export default function TimerScreen() {
               todos.map(todo => {
                 const isRunning = activeTaskId === todo.id;
                 const displayTime = (todo.trackedSeconds || 0) + (isRunning ? liveSeconds : 0);
+                const sType = todo.studyType || 'self';
 
                 return (
                   <div key={todo.id} className={`bg-white border rounded-2xl p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition-all duration-300 ${todo.isDone ? 'border-transparent bg-slate-50/50 opacity-70' : isRunning ? 'border-[#10a37f]/40 shadow-sm' : 'border-sky-50 hover:shadow-sm hover:border-sky-100'}`}>
@@ -721,16 +785,25 @@ export default function TimerScreen() {
                       </button>
                       
                       <div className="flex-1">
-                        {todo.type === 'academic' && (
-                          <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
-                            <span className="text-[10px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">{todo.subjectName}</span>
-                            {todo.actions.map(act => (
-                              <span key={act} className="text-[10px] font-medium text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md uppercase tracking-wide">
-                                {act}
-                              </span>
-                            ))}
-                          </div>
-                        )}
+                        <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
+                          {/* 🏷️ SHOW MODE BADGE */}
+                          {sType === 'class' ? (
+                            <span className="text-[9px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded flex items-center gap-1 uppercase tracking-wide"><GraduationCap size={10}/> Class</span>
+                          ) : (
+                            <span className="text-[9px] font-bold text-[#10a37f] bg-[#10a37f]/10 border border-[#10a37f]/20 px-1.5 py-0.5 rounded flex items-center gap-1 uppercase tracking-wide"><BookOpen size={10}/> Self</span>
+                          )}
+
+                          {todo.type === 'academic' && (
+                            <>
+                              <span className="text-[10px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">{todo.subjectName}</span>
+                              {todo.actions.map(act => (
+                                <span key={act} className="text-[10px] font-medium text-slate-500 border border-slate-200 px-2 py-0.5 rounded-md uppercase tracking-wide">
+                                  {act}
+                                </span>
+                              ))}
+                            </>
+                          )}
+                        </div>
                         <span className={`text-sm font-normal transition-all ${todo.isDone ? 'line-through text-slate-400' : isRunning ? 'text-[#10a37f] font-medium' : 'text-slate-700'}`}>
                           {todo.title}
                         </span>

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { supabase } from '../services/supabase';
-import { Clock, CalendarDays, History as HistoryIcon, TrendingUp, BarChart3, Target } from 'lucide-react';
+import { Clock, CalendarDays, History as HistoryIcon, TrendingUp, BarChart3, Target, BookOpen, GraduationCap } from 'lucide-react';
 
 export default function History() {
   const [logs, setLogs] = useState([]);
@@ -16,9 +16,10 @@ export default function History() {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return;
     
+    // 🚀 NEW: Fetching self_study_seconds & class_seconds
     const { data, error } = await supabase
       .from('daily_logs')
-      .select('date_str, study_seconds, created_at')
+      .select('date_str, study_seconds, self_study_seconds, class_seconds, created_at')
       .eq('user_id', session.user.id)
       .order('created_at', { ascending: false })
       .limit(30);
@@ -31,7 +32,16 @@ export default function History() {
   const graphData = useMemo(() => {
     if (loading) return [];
     
-    const dataMap = new Map(logs.map(log => [log.date_str, log.study_seconds]));
+    // 🚀 NEW: Mapping breakdown data
+    const dataMap = new Map(logs.map(log => [
+      log.date_str, 
+      {
+        total: parseInt(log.study_seconds || 0),
+        self: parseInt(log.self_study_seconds || 0),
+        cls: parseInt(log.class_seconds || 0)
+      }
+    ]));
+
     const result = [];
     
     for (let i = 29; i >= 0; i--) {
@@ -39,13 +49,16 @@ export default function History() {
       d.setDate(d.getDate() - i);
       const dStr = d.toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka' });
       
-      const seconds = dataMap.get(dStr) || 0;
+      const dayData = dataMap.get(dStr) || { total: 0, self: 0, cls: 0 };
+      
       result.push({
         fullDate: dStr,
         dayName: d.toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'Asia/Dhaka' }), 
         label: i === 0 ? 'Today' : d.toLocaleDateString('en-GB', { weekday: 'short', month: 'short', day: 'numeric' }),
-        hours: seconds / 3600,
-        seconds: seconds,
+        hours: dayData.total / 3600,
+        seconds: dayData.total,
+        selfSeconds: dayData.self,
+        classSeconds: dayData.cls,
         isToday: i === 0
       });
     }
@@ -92,7 +105,8 @@ export default function History() {
   const formatListTime = (totalSeconds) => {
     const h = Math.floor(totalSeconds / 3600);
     const m = Math.floor((totalSeconds % 3600) / 60);
-    if (h > 0) return `${h}h ${m}m`;
+    if (h > 0 && m > 0) return `${h}h ${m}m`;
+    if (h > 0) return `${h}h`;
     return `${m}m`;
   };
 
@@ -143,7 +157,7 @@ export default function History() {
         {/* 📊 APPLE-STYLE INTERACTIVE GRAPH CARD (Sky Blue Glassmorphism) */}
         <div className={`${skyGlassCard} pb-8`}>
           
-          {/* BIG SELECTED DAY INFO */}
+          {/* BIG SELECTED DAY INFO & BREAKDOWN */}
           <div className="text-center mb-8">
             <h2 className="text-4xl font-light text-slate-800 tracking-tight">
               {selectedDay ? formatBigTime(selectedDay.seconds) : "0 hr, 0 min"}
@@ -151,6 +165,19 @@ export default function History() {
             <p className="text-sm font-medium text-slate-400 mt-1">
               {selectedDay ? selectedDay.label : "Select a day"}
             </p>
+            
+            {/* 🚀 NEW: Breakdown under the big time */}
+            {selectedDay && selectedDay.seconds > 0 && (
+              <div className="flex items-center justify-center gap-4 mt-3 bg-white/50 w-fit mx-auto px-4 py-1.5 rounded-full border border-sky-100 shadow-sm">
+                <span className="text-[10px] sm:text-[11px] font-bold text-slate-600 uppercase tracking-wide flex items-center gap-1.5">
+                  <BookOpen size={13} className="text-[#10a37f]"/> Self: {formatListTime(selectedDay.selfSeconds)}
+                </span>
+                <span className="text-slate-300">|</span>
+                <span className="text-[10px] sm:text-[11px] font-bold text-slate-600 uppercase tracking-wide flex items-center gap-1.5">
+                  <GraduationCap size={13} className="text-indigo-500"/> Class: {formatListTime(selectedDay.classSeconds)}
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="relative w-full h-56 sm:h-64">
@@ -232,8 +259,22 @@ export default function History() {
                     </span>
                   </div>
                   
-                  <div className="font-mono text-sm tracking-tight tabular-nums font-bold px-3 py-1.5 rounded-xl bg-slate-50 text-slate-600 border border-slate-100 group-hover:bg-[#10a37f]/10 group-hover:text-[#10a37f] group-hover:border-[#10a37f]/20 transition-colors">
-                    {formatListTime(log.study_seconds)}
+                  <div className="flex flex-col items-end">
+                    <div className="font-mono text-sm tracking-tight tabular-nums font-bold px-3 py-1.5 rounded-xl bg-slate-50 text-slate-600 border border-slate-100 group-hover:bg-[#10a37f]/10 group-hover:text-[#10a37f] group-hover:border-[#10a37f]/20 transition-colors">
+                      {formatListTime(log.study_seconds)}
+                    </div>
+                    
+                    {/* 🚀 NEW: Breakdown tiny badges in the list */}
+                    {(log.self_study_seconds > 0 || log.class_seconds > 0) && (
+                      <div className="flex gap-2 mt-1.5 opacity-60 group-hover:opacity-100 transition-opacity">
+                        <span className="text-[9px] font-bold text-slate-500 flex items-center gap-1">
+                          <BookOpen size={10} className="text-[#10a37f]"/> {formatListTime(log.self_study_seconds)}
+                        </span>
+                        <span className="text-[9px] font-bold text-slate-500 flex items-center gap-1">
+                          <GraduationCap size={10} className="text-indigo-500"/> {formatListTime(log.class_seconds)}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))
